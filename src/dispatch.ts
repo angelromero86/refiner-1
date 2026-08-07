@@ -293,6 +293,13 @@ function handleContentKey(app: App, renderer: CliRenderer, key: string): boolean
       app.contentCursor = Math.min(n - 1, app.contentCursor + Math.floor(h / 2))
       app.selectionAnchor = -1
       break
+    case 'h':
+      // Next block of changed lines. Wraps, so it never becomes a dead key.
+      app.jumpToHunk(1)
+      return true
+    case 'H':
+      app.jumpToHunk(-1)
+      return true
     case 'home':
       app.contentCursor = 0
       app.selectionAnchor = -1

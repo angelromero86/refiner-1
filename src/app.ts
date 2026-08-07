@@ -19,6 +19,8 @@ import {
   align,
   computeStagedIndices,
   contextOnly,
+  hunkStarts,
+  RowKind,
   filterContentLines,
   filterCurrentView,
   LineKind,
@@ -606,6 +608,58 @@ export class App {
     }
   }
 
+  /**
+   * Which of the active view's rows are part of a change, flattened to a flat
+   * boolean list so hunk-finding doesn't need to know which view is on screen.
+   */
+  private changedRowFlags(): boolean[] {
+    const cached = this.cache.get(this.selectedPath)
+    if (!cached) return []
+    switch (this.effectiveViewMode()) {
+      case ViewMode.Split:
+        return cached.split.map(
+          (r) => r.kind === RowKind.Add || r.kind === RowKind.Del || r.kind === RowKind.Mod,
+        )
+      case ViewMode.Current:
+        // Deletions aren't shown here, so an add is the only visible change.
+        return cached.current.map((l) => l.kind === LineKind.Add)
+      default:
+        return cached.unified.map((l) => l.kind === LineKind.Add || l.kind === LineKind.Del)
+    }
+  }
+
+  /**
+   * jumpToHunk moves the cursor to the start of the next (`+1`) or previous (`-1`)
+   * block of changed lines.
+   *
+   * Wraps around, like the tree cursor does: on a file whose only change is near
+   * the top, stopping dead at the last hunk would leave you pressing a key that
+   * does nothing. A file with no changes has no hunks and this is a no-op.
+   */
+  jumpToHunk(delta: 1 | -1): void {
+    const starts = hunkStarts(this.changedRowFlags())
+    if (starts.length === 0) return
+
+    let target: number
+    if (delta === 1) {
+      target = starts.find((i) => i > this.contentCursor) ?? starts[0]
+    } else {
+      // The cursor usually sits ON a hunk start, and "previous" should then mean
+      // the one before it, not the one it is already on.
+      target = [...starts].reverse().find((i) => i < this.contentCursor) ?? starts[starts.length - 1]
+    }
+    this.contentCursor = target
+    this.selectionAnchor = -1
+    // Centered, not merely visible: landing on the pane's edge would show the
+    // hunk's first line and nothing under it, which is the part you came to read.
+    this.centerCursor()
+  }
+
+  /** How many separate blocks of changed lines the active view holds. */
+  hunkCount(): number {
+    return hunkStarts(this.changedRowFlags()).length
+  }
+
   /** The working-tree line number the content cursor currently sits on. */
   cursorLine(): number {
     const cached = this.cache.get(this.selectedPath)
@@ -691,6 +745,24 @@ export class App {
       this.contentScroll = this.contentCursor - h + 1
     }
     if (this.contentScroll < 0) this.contentScroll = 0
+  }
+
+  /**
+   * centerCursor puts the cursor row in the middle of the pane.
+   *
+   * For a jump — as opposed to a one-row move — the minimal scroll of
+   * ensureCursorVisible is the wrong behaviour: it parks the target on the very
+   * edge, showing its first line and none of what follows, so you have to scroll
+   * anyway to see what you jumped to.
+   *
+   * Clamped at both ends, so a hunk near the start or the end of the file sits as
+   * close to the middle as the file allows rather than leaving the pane half empty.
+   */
+  centerCursor(): void {
+    const h = this.paneInnerHeight()
+    const maxScroll = Math.max(0, this.activeRowCount() - h)
+    const centered = this.contentCursor - Math.floor(h / 2)
+    this.contentScroll = Math.min(maxScroll, Math.max(0, centered))
   }
 
   // -------------------------------------------------------------- staging

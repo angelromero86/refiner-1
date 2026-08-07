@@ -48,6 +48,10 @@ export const KEYMAP: readonly KeySection[] = [
       { keys: '⇧↑ ⇧↓', what: 'extend a multi-line selection' },
       { keys: '⌃u ⌃d', what: 'half-page up / down (also pgup / pgdn)' },
       { keys: 'home / end', what: 'jump to the first / last row (G also jumps to the end)' },
+      {
+        keys: 'h / H',
+        what: 'jump to the next / previous hunk — the next block of changed lines, wrapping at the ends',
+      },
       { keys: 'space', what: 'stage or unstage the line, or the whole selection' },
       { keys: 'enter', what: 'open the thread on this line, or start a new one' },
       { keys: 'tab', what: 'cycle the view: DIFF → SPLIT → NORMAL' },

@@ -401,6 +401,24 @@ export function align(lines: Line[]): AlignedRow[] {
 }
 
 /**
+ * hunkStarts returns the row indices that begin a run of changed rows.
+ *
+ * Note this is not git's notion of a hunk. refiner asks for `-U99999`, so git
+ * reports the entire file as one hunk and the `@@` headers are dropped before
+ * anything is cached. What a reviewer actually perceives as "a hunk" is a
+ * contiguous block of added/removed lines surrounded by context, which is exactly
+ * what this finds — and it works the same whichever view is active, because the
+ * caller flattens its own rows down to "changed or not" first.
+ */
+export function hunkStarts(changed: boolean[]): number[] {
+  const out: number[] = []
+  for (let i = 0; i < changed.length; i++) {
+    if (changed[i] && !changed[i - 1]) out.push(i)
+  }
+  return out
+}
+
+/**
  * contextOnly turns a file's contents into a diff that consists entirely of
  * context lines.
  *
