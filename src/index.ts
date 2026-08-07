@@ -44,7 +44,7 @@ async function main(): Promise<void> {
   // Must run before anything reaches into OpenTUI's asset resolution.
   configureAssetRoot()
 
-  const { theme, editor, popup, warning } = await loadConfig()
+  const { theme, editor, popup, icons, warning } = await loadConfig()
   if (warning) process.stderr.write(`warning: ${warning}\n`)
   applyTheme(theme)
 
@@ -57,6 +57,7 @@ async function main(): Promise<void> {
   app.author = (await gitUserName()) || guessUser()
   app.editor = editor
   app.popup = popup
+  app.icons = icons
 
   const renderer = await createCliRenderer({
     // The console overlay would swallow keys we bind; errors surface in the

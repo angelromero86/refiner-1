@@ -148,6 +148,11 @@ export class View {
       border: true,
       borderStyle: 'rounded',
       borderColor: S.palette.muted,
+      // Opaque on purpose. A transparent cell emits no background change, so the
+      // terminal keeps whatever the previous cell set — which let a highlighted
+      // cursor row bleed across the pane border and tint the whole diff row next
+      // to it. Painting the panes gives every cell an explicit background.
+      backgroundColor: S.palette.background,
       paddingLeft: 1,
       paddingRight: 1,
       flexShrink: 0,
@@ -159,6 +164,7 @@ export class View {
       border: true,
       borderStyle: 'rounded',
       borderColor: S.palette.muted,
+      backgroundColor: S.palette.background,
       paddingLeft: 1,
       paddingRight: 1,
       flexGrow: 1,
@@ -362,26 +368,36 @@ export class View {
     return rowsToStyledText(rows)
   }
 
+  /**
+   * One row of the file tree, laid out as `guides + icon + name … ● status`.
+   *
+   * The status badge and the thread dot are pinned to the last columns rather than
+   * following the name, so they line up down the pane whatever the nesting depth —
+   * scanning "what changed" becomes reading one column instead of hunting along
+   * ragged indentation.
+   */
   private buildTreeRow(item: FlatNode, isCursor: boolean, w: number): TextChunk[] {
     const app = this.app
     // The cursor highlight shows only while the tree has focus.
     const cursorHere = isCursor && app.focus === Focus.Tree
     const bg = S.palette.cursorBg
+    // On the cursor row every segment carries the highlight, including the gaps.
+    const padStyle: Style | undefined = cursorHere ? { bg } : undefined
+    const guideStyle = cursorHere ? { bg } : S.treeGuide
 
     if (item.node.type === 'dir') {
       const dir = item.node
-      // Nerd Font folder icons — open / closed.
-      const icon = app.collapsed.has(dir.path) ? '' : ''
-      const label = `${icon}  ${dir.name}/`
-      const base = app.isDirFullyStaged(dir) ? S.dirStaged : S.dir
-      if (cursorHere) {
-        return fitOverlayRow(
-          [chunk(item.prefix, { bg }), chunk(label, withBg(base, bg))],
-          w,
-          { bg },
-        )
-      }
-      return clampRow([chunk(item.prefix, S.treeGuide), chunk(label, base)], w)
+      const icon = app.collapsed.has(dir.path) ? app.icons.folderClosed : app.icons.folderOpen
+      let base = app.isDirFullyStaged(dir) ? S.dirStaged : S.dir
+      if (cursorHere) base = withBg(base, bg)
+      return pinRight(
+        [chunk(item.prefix, guideStyle), chunk(`${iconCell(icon)} ${dir.name}/`, base)],
+        // Directories have no badge, but they still yield the channel so a long
+        // folder name can't run through the column the statuses live in.
+        [chunk(' '.repeat(TREE_GUTTER_W), padStyle)],
+        w,
+        padStyle,
+      )
     }
 
     const file = item.node
@@ -392,33 +408,31 @@ export class View {
     const staged = app.isFileFullyStaged(file.path)
     const hasThreads = app.fileHasThreads(file.path)
 
-    if (cursorHere) {
-      let nameStyle: Style = staged ? withBg(S.fileStaged, bg) : { bg }
-      if (isSelectedFile) nameStyle = { ...nameStyle, underline: true }
-      return fitOverlayRow(
-        [
-          chunk(item.prefix, { bg }),
-          chunk(status, withBg(statusStyle(status), bg)),
-          chunk('  ', { bg }),
-          chunk(file.name, nameStyle),
-        ],
-        w,
-        { bg },
-        hasThreads ? chunk('●', { bg, fg: S.palette.threadBg }) : null,
-      )
-    }
-
     let nameStyle: Style = staged ? S.fileStaged : S.text
+    if (cursorHere) nameStyle = withBg(nameStyle, bg)
     if (isSelectedFile) nameStyle = { ...nameStyle, underline: true }
-    return rightAlignMarker(
+
+    const threadStyle: Style = cursorHere
+      ? { bg, fg: S.palette.threadMarker }
+      : S.marker
+    const badgeStyle = cursorHere ? withBg(statusStyle(status), bg) : statusStyle(status)
+
+    return pinRight(
       [
-        chunk(item.prefix, S.treeGuide),
-        chunk(status, statusStyle(status)),
-        chunk('  '),
+        chunk(item.prefix, guideStyle),
+        // Exactly one space, and no icon slot. Enough to keep the `─` from running
+        // into the first letter, not enough to read as indentation — a folder's
+        // glyph starts one column earlier, which is the intended difference.
+        chunk(' ', padStyle),
         chunk(file.name, nameStyle),
       ],
+      [
+        chunk(hasThreads ? '●' : ' ', threadStyle),
+        chunk(' ', padStyle),
+        chunk(status, badgeStyle),
+      ],
       w,
-      hasThreads ? chunk('●', S.marker) : null,
+      padStyle,
     )
   }
 
@@ -1040,7 +1054,7 @@ export class View {
         ],
         w,
         { bg },
-        hasThreads ? chunk('●', { bg, fg: S.palette.threadBg }) : null,
+        hasThreads ? chunk('●', { bg, fg: S.palette.threadMarker }) : null,
       )
     }
 
@@ -1080,6 +1094,48 @@ function truncateChunkList(chunks: TextChunk[], w: number): TextChunk[] {
 /** Truncate to `w` without padding — for rows that need no background fill. */
 function clampRow(row: TextChunk[], w: number): TextChunk[] {
   return chunksWidth(row) > w ? truncateChunkList(row, w) : row
+}
+
+/** Cells reserved for a tree row's folder glyph, so names align under each other. */
+const ICON_CELL_W = 2
+
+/** Cells reserved at the right of every tree row: thread dot, gap, status badge. */
+const TREE_GUTTER_W = 3
+
+/**
+ * iconCell pads a glyph out to a fixed cell budget.
+ *
+ * Nerd Font glyphs are one cell, emoji are two, and the whole point of the tree's
+ * alignment is that neither shifts the filenames — so the glyph is measured rather
+ * than assumed, and the difference is made up with spaces.
+ */
+function iconCell(icon: string): string {
+  const iw = textWidth(icon)
+  return iw >= ICON_CELL_W ? icon : icon + ' '.repeat(ICON_CELL_W - iw)
+}
+
+/**
+ * pinRight lays a row out as `left … right`, exactly `w` columns wide, with the
+ * right group flush against the last column.
+ *
+ * `left` is truncated when it would collide with `right` — the pinned group always
+ * wins, because it is the thing whose alignment the layout exists to guarantee.
+ */
+function pinRight(
+  left: TextChunk[],
+  right: TextChunk[],
+  w: number,
+  padStyle?: Style,
+): TextChunk[] {
+  const rightW = chunksWidth(right)
+  const room = Math.max(0, w - rightW)
+  const trimmed = chunksWidth(left) > room ? truncateChunkList(left, room) : left
+  const gap = Math.max(0, room - chunksWidth(trimmed))
+  const out = [...trimmed]
+  if (gap > 0) out.push(chunk(' '.repeat(gap), padStyle))
+  // A pane too narrow to hold the gutter drops it rather than overflowing.
+  if (rightW <= w) out.push(...right)
+  return out
 }
 
 /**

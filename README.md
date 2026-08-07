@@ -150,12 +150,20 @@ del_fg  = "#fb4934"      # signo -, badge D, errores y el label OUTDATED
 staged_bg = "#23303d"
 staged_fg = "#83a598"
 
-# Indicador "aquí hay un thread" (gutter + ● en árbol + banda del minimapa)
-thread       = "#4c2b3d"
-thread_label = "#fbf1c7"   # texto sobre el fondo del gutter
+# Indicador "aquí hay un thread". Son tres roles distintos:
+thread        = "#4c2b3d"   # FONDO del gutter en las líneas comentadas (oscuro)
+thread_label  = "#fbf1c7"   # texto sobre ese fondo
+thread_marker = "#d3869b"   # el ● del árbol y la banda del minimapa (brillante)
 
+tree_guide = "#665c54"   # las líneas ├ └ │ del árbol
 cursor_bg  = "#3c3836"   # fila bajo el cursor
-background = "#282828"   # fondo de los modales (deben ser opacos)
+background = "#282828"   # lienzo de los paneles y fondo de los modales
+
+# Glifos del árbol. Nerd Font por defecto; cualquier string vale, incluido emoji —
+# el ancho se mide, así que un emoji de 2 celdas no descuadra los nombres.
+[icons]
+folder_open   = ""
+folder_closed = ""
 
 # Tamaño de la ventana flotante de `e` y `g`, en % del terminal (20..100).
 # Solo la respetan tmux y zellij.

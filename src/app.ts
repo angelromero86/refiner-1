@@ -39,7 +39,12 @@ import { build as buildTree, flatten, type DirNode, type FlatNode, type Node } f
 import { Store, type StoredThread } from './comments.ts'
 import { highlightDiff, NO_HIGHLIGHTS, type DiffHighlights } from './syntax.ts'
 import { defaultUIState, loadState, saveState } from './state.ts'
-import { defaultConfig, type EditorConfig, type PopupConfig } from './config.ts'
+import {
+  defaultConfig,
+  type EditorConfig,
+  type IconConfig,
+  type PopupConfig,
+} from './config.ts'
 
 export enum Focus {
   Tree,
@@ -219,6 +224,8 @@ export class App {
   editor: EditorConfig = defaultConfig().editor
   /** How big the floating window for `e` and `g` should be. */
   popup: PopupConfig = defaultConfig().popup
+  /** Glyphs for the file tree. */
+  icons: IconConfig = defaultConfig().icons
 
   inputs: TextInputs = NO_INPUTS
   /** Set by the view; invoked after any state mutation. */

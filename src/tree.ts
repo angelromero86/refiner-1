@@ -87,7 +87,9 @@ function flattenInner(
     let prefix = ''
     if (depth >= 1) {
       for (const t of ancestorTrails) prefix += t ? '│ ' : '  '
-      prefix += isLast ? '└ ' : '├ '
+      // The horizontal connector matters: `├─` visibly reaches the entry it
+      // belongs to, where a bare `├ ` leaves it floating next to one.
+      prefix += isLast ? '└─' : '├─'
     }
     out.push({ node: n, depth, prefix })
     if (n.type === 'dir' && !collapsed.has(n.path)) {

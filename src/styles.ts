@@ -68,6 +68,7 @@ export interface Palette {
   stagedFg: RGBA
   threadBg: RGBA
   threadLabel: RGBA
+  threadMarker: RGBA
   cursorBg: RGBA
   background: RGBA
 }
@@ -193,6 +194,8 @@ function buildStyles(t: Theme): Styles {
   const stagedFg = RGBA.fromHex(t.stagedFg)
   const threadBg = RGBA.fromHex(t.thread)
   const threadLabel = RGBA.fromHex(t.threadLabel)
+  const threadMarker = RGBA.fromHex(t.threadMarker)
+  const treeGuide = RGBA.fromHex(t.treeGuide)
   const cursorBg = RGBA.fromHex(t.cursorBg)
   const background = RGBA.fromHex(t.background)
 
@@ -221,6 +224,7 @@ function buildStyles(t: Theme): Styles {
       stagedFg,
       threadBg,
       threadLabel,
+      threadMarker,
       cursorBg,
       background,
     },
@@ -266,10 +270,10 @@ function buildStyles(t: Theme): Styles {
     dir: { fg: accent, bold: true },
     dirStaged: { fg: stagedFg, bold: true },
     fileStaged: { fg: stagedFg },
-    marker: { fg: threadBg },
-    // Guide lines (│ ├ └) use the soft cursor color so they read as tree
-    // structure without competing with file names.
-    treeGuide: { fg: cursorBg },
+    marker: { fg: threadMarker },
+    // Guide lines (│ ├ └) get their own tone: bright enough to follow a nesting
+    // level across the pane, dim enough to stay behind the filenames.
+    treeGuide: { fg: treeGuide },
 
     syntaxHighlight: t.syntaxHighlight,
 

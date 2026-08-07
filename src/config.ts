@@ -40,11 +40,41 @@ export interface PopupConfig {
   heightPct: number
 }
 
+/**
+ * Glyphs for the file tree. Defaults are Nerd Font folder icons; any string works,
+ * including emoji — the renderer measures the glyph and pads it to a fixed cell
+ * budget, so a 2-cell emoji keeps the filenames aligned just as a 1-cell glyph does.
+ */
+export interface IconConfig {
+  folderOpen: string
+  folderClosed: string
+}
+
 export interface Config {
   theme: Theme
   editor: EditorConfig
   popup: PopupConfig
+  icons: IconConfig
   warning?: string
+}
+
+/** nf-fa-folder_open / nf-fa-folder. */
+const DEFAULT_ICONS: IconConfig = {
+  folderOpen: '\uf07c',
+  folderClosed: '\uf07b',
+}
+
+function resolveIcons(value: unknown): IconConfig {
+  const out = { ...DEFAULT_ICONS }
+  if (typeof value !== 'object' || value === null) return out
+  const obj = value as Record<string, unknown>
+  if (typeof obj['folder_open'] === 'string' && obj['folder_open'] !== '') {
+    out.folderOpen = obj['folder_open']
+  }
+  if (typeof obj['folder_closed'] === 'string' && obj['folder_closed'] !== '') {
+    out.folderClosed = obj['folder_closed']
+  }
+  return out
 }
 
 const DEFAULT_POPUP_PCT = 90
@@ -111,6 +141,7 @@ export function defaultConfig(): Config {
     theme: defaultTheme(),
     editor: { command, lineStyle: resolveLineStyle(command, undefined) },
     popup: { widthPct: DEFAULT_POPUP_PCT, heightPct: DEFAULT_POPUP_PCT },
+    icons: { ...DEFAULT_ICONS },
   }
 }
 
@@ -158,7 +189,7 @@ export async function loadConfig(path = configPath()): Promise<Config> {
     heightPct: resolvePct(obj['popup_height']),
   }
 
-  return { theme, editor, popup }
+  return { theme, editor, popup, icons: resolveIcons(obj['icons']) }
 }
 
 /**

@@ -67,6 +67,25 @@ export interface Theme {
    */
   threadLabel: string
 
+  /**
+   * ThreadMarker — the `●` beside files with threads, and the minimap band.
+   *
+   * Separate from `thread` because the two are opposite roles: `thread` is a
+   * background and wants to be dark enough to read code on top of, while this is a
+   * foreground on that same dark terminal and has to actually stand out. Reusing
+   * the background colour here made the dot practically invisible.
+   */
+  threadMarker: string
+
+  /**
+   * TreeGuide — the ├ └ │ lines that draw the file tree's structure.
+   *
+   * Its own knob rather than a shade of `muted`, because it wants to be light
+   * enough to trace a nesting level by eye but never compete with the filenames
+   * sitting right next to it.
+   */
+  treeGuide: string
+
   /** CursorBg — background of the row under the cursor. */
   cursorBg: string
 
@@ -117,9 +136,11 @@ export function defaultTheme(): Theme {
     stagedBg: '#23303d',
     stagedFg: '#83a598', // bright blue
 
-    thread: '#4c2b3d',
+    thread: '#4c2b3d', // dark plum — a background
     threadLabel: '#fbf1c7', // fg0
+    threadMarker: '#d3869b', // bright purple — same hue, readable as a foreground
 
+    treeGuide: '#665c54', // bg3
     cursorBg: '#3c3836', // bg1 — the classic gruvbox cursorline
     background: '#282828', // bg0
 
@@ -203,6 +224,8 @@ export const THEME_KEY_MAP: Record<string, ColorKey> = {
   staged_fg: 'stagedFg',
   thread: 'thread',
   thread_label: 'threadLabel',
+  thread_marker: 'threadMarker',
+  tree_guide: 'treeGuide',
   cursor_bg: 'cursorBg',
   background: 'background',
 }
