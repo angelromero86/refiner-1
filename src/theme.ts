@@ -68,6 +68,18 @@ export interface Theme {
 
   /** CursorBg — background of the row under the cursor. */
   cursorBg: string
+
+  /**
+   * Background — the fill behind modal overlays.
+   *
+   * The panes themselves stay transparent and show the terminal through, exactly
+   * as before. Overlays can't: they float above the diff, so without an opaque
+   * fill the code underneath bleeds through the comment text. The default is the
+   * terminal background the rest of this palette was tuned against, so a modal
+   * looks like it sits on the terminal rather than on the diff. Set it lighter
+   * for a raised, "floating card" look.
+   */
+  background: string
 }
 
 export function defaultTheme(): Theme {
@@ -93,6 +105,8 @@ export function defaultTheme(): Theme {
     // Just barely lighter than the omarchy ochre terminal bg (#1c1714): each
     // channel bumped by 0x0a to keep the warm hue but separate the row.
     cursorBg: '#26211e',
+
+    background: '#1c1714',
   }
 }
 
@@ -123,6 +137,7 @@ const KEY_MAP: Record<string, keyof Theme> = {
   comment: 'comment',
   comment_label: 'commentLabel',
   cursor_bg: 'cursorBg',
+  background: 'background',
 }
 
 /**

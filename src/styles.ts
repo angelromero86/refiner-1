@@ -69,6 +69,7 @@ export interface Palette {
   commentBg: RGBA
   commentLabel: RGBA
   cursorBg: RGBA
+  background: RGBA
 }
 
 export interface Styles {
@@ -140,6 +141,7 @@ export const S: Styles = buildStyles({
   comment: '#5a2638',
   commentLabel: '#f5e6c8',
   cursorBg: '#26211e',
+  background: '#1c1714',
 })
 
 export function applyTheme(t: Theme): void {
@@ -162,6 +164,7 @@ function buildStyles(t: Theme): Styles {
   const commentBg = RGBA.fromHex(t.comment)
   const commentLabel = RGBA.fromHex(t.commentLabel)
   const cursorBg = RGBA.fromHex(t.cursorBg)
+  const background = RGBA.fromHex(t.background)
 
   // Cursor row variants per line kind. The bg is always cursorBg so the
   // selection color wins; the fg keeps the kind's vivid color so you can still
@@ -189,6 +192,7 @@ function buildStyles(t: Theme): Styles {
       commentBg,
       commentLabel,
       cursorBg,
+      background,
     },
 
     appName: { fg: primary, bold: true },

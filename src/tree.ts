@@ -97,3 +97,5 @@ function flattenInner(
   }
   return out
 }
+
+// A trailing note added to exercise the diff view.

@@ -37,18 +37,12 @@ export function newThreadModal(
 
 function openModal(app: App, modal: ThreadModal): void {
   app.modal = modal
-  if (modal.mode === ModalMode.Compose) {
-    app.inputs.setComposeValue('')
-    app.inputs.focusCompose()
-  } else {
-    app.inputs.blurCompose()
-  }
+  if (modal.mode === ModalMode.Compose) app.inputs.setComposeValue('')
 }
 
 export function closeModal(app: App): void {
   app.modal = null
   app.inputs.setComposeValue('')
-  app.inputs.blurCompose()
 }
 
 /**
@@ -164,8 +158,13 @@ export function handleCommentsListKey(app: App, key: string): boolean {
  * handleModalKey returns true when the key was consumed. Anything it declines
  * while a text field is active falls through to the widget, which is how typing
  * works in compose/edit mode.
+ *
+ * Synchronous on purpose: the caller has to call preventDefault() during the
+ * event dispatch, so the decision cannot wait on I/O. Store writes are fired off
+ * without awaiting — the in-memory mutation the UI renders from has already
+ * happened by then.
  */
-export async function handleModalKey(app: App, key: string): Promise<boolean> {
+export function handleModalKey(app: App, key: string): boolean {
   const modal = app.modal
   if (!modal) return false
 
@@ -176,7 +175,6 @@ export async function handleModalKey(app: App, key: string): Promise<boolean> {
       modal.mode = ModalMode.Browse
       modal.editIdx = -1
       app.inputs.setComposeValue('')
-      app.inputs.blurCompose()
       return true
     }
     closeModal(app)
@@ -191,7 +189,7 @@ export async function handleModalKey(app: App, key: string): Promise<boolean> {
       case 'alt+enter':
       case 'alt+s':
       case 'ctrl+s':
-        await submitModalCompose(app)
+        submitModalCompose(app)
         return true
       default:
         // Everything else is text input.
@@ -239,14 +237,12 @@ export async function handleModalKey(app: App, key: string): Promise<boolean> {
       modal.mode = ModalMode.Compose
       modal.editIdx = -1
       app.inputs.setComposeValue('')
-      app.inputs.focusCompose()
       return true
     case 'e':
       if (modal.selectedMsg >= 0 && modal.selectedMsg < t.comments.length) {
         modal.mode = ModalMode.Edit
         modal.editIdx = modal.selectedMsg
         app.inputs.setComposeValue(t.comments[modal.selectedMsg].body)
-        app.inputs.focusCompose()
       }
       return true
     case 'd': {
@@ -255,17 +251,17 @@ export async function handleModalKey(app: App, key: string): Promise<boolean> {
       if (t.comments.length === 0) {
         // No comments left → the thread itself is meaningless. Drop it.
         app.threads.deleteThread(t.id)
-        await save(app)
+        save(app)
         closeModal(app)
         return true
       }
       if (modal.selectedMsg >= t.comments.length) modal.selectedMsg = t.comments.length - 1
-      await save(app)
+      save(app)
       return true
     }
     case 'D':
       app.threads.deleteThread(t.id)
-      await save(app)
+      save(app)
       closeModal(app)
       return true
     default:
@@ -282,7 +278,7 @@ export async function handleModalKey(app: App, key: string): Promise<boolean> {
  *
  * Afterwards it drops back into browse mode.
  */
-export async function submitModalCompose(app: App): Promise<void> {
+export function submitModalCompose(app: App): void {
   const modal = app.modal
   if (!modal) return
   const body = app.inputs.composeValue().trim()
@@ -311,24 +307,29 @@ export async function submitModalCompose(app: App): Promise<void> {
     }
   }
 
-  await save(app)
+  save(app)
   modal.mode = ModalMode.Browse
   modal.editIdx = -1
   app.inputs.setComposeValue('')
-  app.inputs.blurCompose()
 }
 
 /**
  * save persists the store, surfacing failures in the error banner. Losing a
  * comment silently would be much worse than a visible warning.
+ *
+ * Fire and forget: the in-memory store is already updated, so the UI is correct
+ * the moment this is called; only the disk write is still in flight.
  */
-async function save(app: App): Promise<void> {
-  try {
-    await app.threads.save()
-    app.err = null
-  } catch (err) {
-    app.err = err as Error
-  }
+function save(app: App): void {
+  void app.threads
+    .save()
+    .then(() => {
+      app.err = null
+    })
+    .catch((err: unknown) => {
+      app.err = err as Error
+      app.render()
+    })
 }
 
 /** Re-export so callers don't need to reach into comments.ts for the type. */

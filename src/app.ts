@@ -128,27 +128,24 @@ export interface FinderModal {
 /**
  * The text widgets live in the view layer (they are renderables), so the app
  * reaches them through this narrow interface instead of holding them directly.
+ *
+ * Deliberately no focus()/blur() here: which widget owns the keyboard is derived
+ * from this state on every render. Requesting focus imperatively meant it could
+ * be asked for while the widget was still invisible, which silently does nothing
+ * — that bug swallowed every keystroke in the compose box.
  */
 export interface TextInputs {
   composeValue(): string
   setComposeValue(v: string): void
-  focusCompose(): void
-  blurCompose(): void
   finderValue(): string
   setFinderValue(v: string): void
-  focusFinder(): void
-  blurFinder(): void
 }
 
 const NO_INPUTS: TextInputs = {
   composeValue: () => '',
   setComposeValue: () => {},
-  focusCompose: () => {},
-  blurCompose: () => {},
   finderValue: () => '',
   setFinderValue: () => {},
-  focusFinder: () => {},
-  blurFinder: () => {},
 }
 
 export class App {

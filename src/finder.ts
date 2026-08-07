@@ -66,13 +66,11 @@ export function refreshFinder(app: App): void {
 export function openFinder(app: App): void {
   app.finder = newFinderModal()
   app.inputs.setFinderValue('')
-  app.inputs.focusFinder()
   refreshFinder(app)
 }
 
 export function closeFinder(app: App): void {
   app.finder = null
-  app.inputs.blurFinder()
 }
 
 /**

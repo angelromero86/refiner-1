@@ -96,15 +96,27 @@ export class View {
     app.inputs = {
       composeValue: () => this.composeInput.plainText,
       setComposeValue: (v) => this.composeInput.setText(v),
-      focusCompose: () => this.composeInput.focus(),
-      blurCompose: () => this.composeInput.blur(),
       finderValue: () => this.finderInput.value,
       setFinderValue: (v) => {
         this.finderInput.value = v
       },
-      focusFinder: () => this.finderInput.focus(),
-      blurFinder: () => this.finderInput.blur(),
     }
+  }
+
+  /**
+   * Keyboard focus follows state, applied after visibility has been settled for
+   * this frame. Focusing a hidden renderable is a silent no-op, so doing this
+   * imperatively when a modal opened meant the widget never actually received
+   * focus and every keystroke vanished.
+   */
+  private syncWidgetFocus(): void {
+    const app = this.app
+    const wantCompose = app.modal !== null && app.modal.mode !== ModalMode.Browse
+    if (wantCompose) this.composeInput.focus()
+    else this.composeInput.blur()
+
+    if (app.finder !== null) this.finderInput.focus()
+    else this.finderInput.blur()
   }
 
   private build(): void {
@@ -210,6 +222,10 @@ export class View {
       border: true,
       borderStyle: 'rounded',
       borderColor: S.palette.primary,
+      // Overlays must be opaque. The panes are transparent and let the terminal
+      // through, but a modal floats over the diff — without a fill the code
+      // underneath reads straight through the comment text.
+      backgroundColor: S.palette.background,
       paddingTop: 1,
       paddingBottom: 1,
       paddingLeft: 2,
@@ -240,6 +256,7 @@ export class View {
     this.renderThreadModal()
     this.renderCommentsList()
     this.renderFinder()
+    this.syncWidgetFocus()
   }
 
   private renderHeader(): void {

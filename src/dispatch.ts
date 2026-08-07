@@ -34,7 +34,14 @@ export function installKeyHandling(app: App, renderer: CliRenderer): void {
       shutdown(renderer)
       return
     }
-    void route(app, renderer, key, event)
+    // Everything below must decide synchronously: preventDefault() only counts
+    // during this dispatch, and anything we don't claim has to reach the focused
+    // text widget untouched. Handlers therefore kick off their git/store I/O
+    // without awaiting it.
+    if (route(app, renderer, key)) {
+      event.preventDefault()
+      app.render()
+    }
   })
 }
 
@@ -43,67 +50,33 @@ function shutdown(renderer: CliRenderer): void {
   process.exit(0)
 }
 
-async function route(
-  app: App,
-  renderer: CliRenderer,
-  key: string,
-  event: KeyEvent,
-): Promise<void> {
+/** route returns true when refiner claimed the key. */
+function route(app: App, renderer: CliRenderer, key: string): boolean {
   // Modals get first refusal, in the same order the Go Update did.
-  if (app.modal) {
-    const consumed = await handleModalKey(app, key)
-    if (consumed) {
-      event.preventDefault()
-      app.render()
-    }
-    return
-  }
-  if (app.commentsList) {
-    if (handleCommentsListKey(app, key)) {
-      event.preventDefault()
-      app.render()
-    }
-    return
-  }
-  if (app.finder) {
-    if (handleFinderKey(app, key)) {
-      event.preventDefault()
-      app.render()
-    }
-    return
-  }
-
-  if (await handleGlobalKey(app, renderer, key)) {
-    event.preventDefault()
-    app.render()
-    return
-  }
-
-  const handled =
-    app.focus === Focus.Tree
-      ? await handleTreeKey(app, key)
-      : await handleContentKey(app, renderer, key)
-  if (handled) {
-    event.preventDefault()
-    app.render()
-  }
+  if (app.modal) return handleModalKey(app, key)
+  if (app.commentsList) return handleCommentsListKey(app, key)
+  if (app.finder) return handleFinderKey(app, key)
+  if (handleGlobalKey(app, renderer, key)) return true
+  return app.focus === Focus.Tree
+    ? handleTreeKey(app, key)
+    : handleContentKey(app, renderer, key)
 }
 
 /**
  * handleGlobalKey covers the shortcuts that work from either pane. Returns true
  * when the key was consumed.
  */
-async function handleGlobalKey(app: App, renderer: CliRenderer, key: string): Promise<boolean> {
+function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean {
   switch (key) {
     case 'q':
     case 'esc':
       shutdown(renderer)
       return true
     case 'r':
-      await app.refresh()
+      void app.refresh()
       return true
     case 'g':
-      await openLazygit(app, renderer)
+      void openLazygit(app, renderer)
       return true
     case 'c':
       // Reachable only when no other modal is open — route() checks those first.
@@ -137,7 +110,7 @@ async function handleGlobalKey(app: App, renderer: CliRenderer, key: string): Pr
   }
 }
 
-async function handleTreeKey(app: App, key: string): Promise<boolean> {
+function handleTreeKey(app: App, key: string): boolean {
   if (app.flat.length === 0) return false
   switch (key) {
     case 'up':
@@ -156,7 +129,7 @@ async function handleTreeKey(app: App, key: string): Promise<boolean> {
       return true
     case ' ': {
       const node = app.flat[app.cursor]?.node
-      if (node?.type === 'file') await toggleFullStage(app, node.file)
+      if (node?.type === 'file') void toggleFullStage(app, node.file)
       return true
     }
     default:
@@ -200,13 +173,13 @@ function activateCursor(app: App): void {
   app.focus = Focus.Content
 }
 
-async function handleContentKey(app: App, renderer: CliRenderer, key: string): Promise<boolean> {
+function handleContentKey(app: App, renderer: CliRenderer, key: string): boolean {
   const n = app.activeRowCount()
   const h = app.paneInnerHeight()
 
   switch (key) {
     case 'e':
-      await openEditor(app, renderer)
+      void openEditor(app, renderer)
       return true
     case 'tab':
       // Cycle DIFF → SPLIT → NORMAL → DIFF. Not persisted: sessions always
@@ -256,7 +229,7 @@ async function handleContentKey(app: App, renderer: CliRenderer, key: string): P
       app.selectionAnchor = -1
       break
     case ' ':
-      await toggleStaged(app)
+      void toggleStaged(app)
       return true
     case 'enter':
       openOrCreateThread(app)
