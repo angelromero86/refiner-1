@@ -1,0 +1,24 @@
+{
+  "name": "refiner-tui",
+  "version": "0.1.0",
+  "description": "Git code-review TUI with line-level staging and review threads, built on Bun + OpenTUI",
+  "license": "MIT",
+  "type": "module",
+  "module": "src/index.ts",
+  "bin": {
+    "refiner": "src/index.ts"
+  },
+  "scripts": {
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "build": "bun build --compile --minify --outfile dist/refiner src/index.ts"
+  },
+  "dependencies": {
+    "@opentui/core": "^0.5.1"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "typescript": "^7.0.2"
+  }
+}
