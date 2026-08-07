@@ -401,6 +401,34 @@ export function align(lines: Line[]): AlignedRow[] {
 }
 
 /**
+ * contextOnly turns a file's contents into a diff that consists entirely of
+ * context lines.
+ *
+ * This is how a file with no changes gets displayed: rather than teach the
+ * renderers about "not a diff", we hand them a diff where nothing changed. Every
+ * view then works unmodified — though only the post-change one is worth looking at,
+ * since the other two would show the same text twice.
+ *
+ * The leading space matters: the renderers strip a one-character diff marker from
+ * every line, so the text has to carry it just like real `git diff` output does.
+ */
+export function contextOnly(text: string): Line[] {
+  const lines = text.split('\n')
+  // A trailing newline produces a final empty element that is not a line.
+  const endsWithNewline = lines.length > 0 && lines[lines.length - 1] === ''
+  if (endsWithNewline) lines.pop()
+
+  return lines.map((t, i) => ({
+    text: ' ' + t,
+    kind: LineKind.Ctx,
+    oldNum: i + 1,
+    newNum: i + 1,
+    // Mirrors what git would report, so anything reading this stays consistent.
+    noNewline: !endsWithNewline && i === lines.length - 1,
+  }))
+}
+
+/**
  * filterContentLines drops meta/header/hunk lines so the remaining list holds
  * only ctx/del/add — what gets cached and rendered.
  */

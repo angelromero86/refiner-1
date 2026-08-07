@@ -80,7 +80,7 @@ export function openOrCreateThread(app: App): void {
     if (newNum > end) end = newNum
   }
 
-  switch (app.viewMode) {
+  switch (app.effectiveViewMode()) {
     case ViewMode.Split:
       selEnd = Math.min(selEnd, cached.split.length - 1)
       for (let i = selStart; i <= selEnd; i++) collect(cached.split[i]?.newNum ?? 0)

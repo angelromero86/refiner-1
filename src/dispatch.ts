@@ -198,6 +198,11 @@ function handleTreeKey(app: App, key: string): boolean {
     case 'enter':
       activateCursor(app)
       return true
+    case 'tab':
+      // Contextual: in the tree Tab switches WHAT is listed, in the diff it
+      // switches HOW the file is shown.
+      void app.toggleFileMode()
+      return true
     case ' ': {
       const node = app.flat[app.cursor]?.node
       if (node?.type === 'file') void toggleFullStage(app, node.file)

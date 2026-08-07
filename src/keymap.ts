@@ -33,6 +33,10 @@ export const KEYMAP: readonly KeySection[] = [
     bindings: [
       { keys: '↑ ↓', what: 'navigate (wraps around)' },
       { keys: 'enter', what: 'expand or collapse a folder · focus the diff for a file' },
+      {
+        keys: 'tab',
+        what: 'switch between CHANGES and ALL — ALL lists the whole repo, so you can read and comment on files nobody has touched',
+      },
       { keys: 'space', what: 'stage or unstage the whole file' },
       { keys: 'p', what: 'fuzzy file finder — space-separated terms, order-independent' },
     ],

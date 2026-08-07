@@ -4,7 +4,16 @@
  * quotes need no escaping.
  */
 
-export type Status = 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | 'T' | '?'
+/**
+ * Porcelain status letters, plus `' '` for "this file has no changes" — which only
+ * occurs in ALL mode, where the tree lists the whole repo rather than just the diff.
+ */
+export type Status = 'M' | 'A' | 'D' | 'R' | 'C' | 'U' | 'T' | '?' | ' '
+
+/** True when the file actually differs from HEAD (or from the review target). */
+export function isChanged(f: ChangedFile): boolean {
+  return f.status !== ' '
+}
 
 export interface ChangedFile {
   path: string
@@ -55,6 +64,37 @@ async function run(args: string[], stdin?: string): Promise<RunResult> {
     proc.exited,
   ])
   return { stdout, stderr, exitCode }
+}
+
+/**
+ * loadAllFiles lists every file in the repo, carrying the change status of the ones
+ * that have it.
+ *
+ * `ls-files --cached --others --exclude-standard` is tracked plus untracked, minus
+ * anything .gitignore excludes — so no node_modules, no build output. Files that are
+ * only in the change set (a deletion already staged, say) are appended, because
+ * ls-files no longer knows about them.
+ */
+export async function loadAllFiles(source: Source): Promise<ChangedFile[]> {
+  const changed = await loadChangedFiles(source)
+  const byPath = new Map(changed.map((f) => [f.path, f]))
+
+  const r = await run(['ls-files', '--cached', '--others', '--exclude-standard'])
+  if (r.exitCode !== 0) throw new Error(`git ls-files: ${r.stderr.trim()}`)
+
+  const out: ChangedFile[] = []
+  const seen = new Set<string>()
+  for (const path of r.stdout.split('\n')) {
+    if (path === '' || seen.has(path)) continue
+    seen.add(path)
+    out.push(
+      byPath.get(path) ?? { path, status: ' ', oldPath: '', indexCode: ' ', workCode: ' ' },
+    )
+  }
+  for (const f of changed) {
+    if (!seen.has(f.path)) out.push(f)
+  }
+  return out
 }
 
 export async function loadChangedFiles(source: Source): Promise<ChangedFile[]> {

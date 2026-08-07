@@ -25,7 +25,7 @@ import {
   type CliRenderer,
   type TextChunk,
 } from '@opentui/core'
-import { App, Focus, ModalMode, ViewMode, viewModeLabel } from './app.ts'
+import { App, fileModeLabel, Focus, ModalMode, ViewMode, viewModeLabel } from './app.ts'
 import { KEYMAP } from './keymap.ts'
 import type { StoredThread } from './comments.ts'
 import { LineKind } from './diff.ts'
@@ -286,7 +286,9 @@ export class View {
       chunk(' · ', S.dim),
       chunk(app.modeLabel(), S.mode),
       chunk(' · ', S.dim),
-      chunk(viewModeLabel(app.viewMode), { ...S.hotkey, bold: true }),
+      chunk(fileModeLabel(app.fileMode), S.mode),
+      chunk(' · ', S.dim),
+      chunk(viewModeLabel(app.effectiveViewMode()), { ...S.hotkey, bold: true }),
     ]
     // Counts threads, and now says so. This used to read "N comments" while
     // counting threads — exactly the confusion this pass removes.
@@ -456,7 +458,7 @@ export class View {
     const rows: TextChunk[][] = []
     const from = app.contentScroll
 
-    switch (app.viewMode) {
+    switch (app.effectiveViewMode()) {
       case ViewMode.Split: {
         const end = Math.min(from + h, cached.split.length)
         const sideW = splitSideWidth(contentW)

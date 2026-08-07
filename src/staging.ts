@@ -11,6 +11,7 @@ import { App, isStageable, ViewMode } from './app.ts'
 import { buildPartialPatch, LineKind, RowKind } from './diff.ts'
 import {
   applyPatchToIndex,
+  isChanged,
   Mode,
   stageFile,
   unstageFile,
@@ -34,7 +35,7 @@ export async function toggleStaged(app: App): Promise<void> {
   // Map the selection to unified indices. Split rows go through
   // oldSrcIdx/newSrcIdx; current rows through cached.currentIdx.
   const targets = new Set<number>()
-  switch (app.viewMode) {
+  switch (app.effectiveViewMode()) {
     case ViewMode.Split: {
       end = Math.min(end, cached.split.length - 1)
       for (let i = start; i <= end; i++) {
@@ -116,6 +117,9 @@ async function resetAndApply(app: App, file: ChangedFile, patch: string): Promis
  */
 export async function toggleFullStage(app: App, file: ChangedFile): Promise<void> {
   if (app.source.mode !== Mode.Uncommitted) return
+  // ALL mode lists files with nothing to stage; git would no-op, but the reload it
+  // triggers would still throw away every cached diff for nothing.
+  if (!isChanged(file)) return
   try {
     // Untracked files aren't in the index at all, so `git add` is the only
     // meaningful direction until they are — and once added, porcelain reports

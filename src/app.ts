@@ -18,6 +18,7 @@
 import {
   align,
   computeStagedIndices,
+  contextOnly,
   filterContentLines,
   filterCurrentView,
   LineKind,
@@ -27,6 +28,8 @@ import {
 } from './diff.ts'
 import {
   fullyStaged,
+  isChanged,
+  loadAllFiles,
   loadChangedFiles,
   loadDiff,
   loadStagedDiff,
@@ -49,6 +52,24 @@ import {
 export enum Focus {
   Tree,
   Content,
+}
+
+/**
+ * What the file tree lists.
+ *
+ *   Changes → only files that differ (the default; reviewing is the point)
+ *   All     → every file in the repo, so a thread can be anchored anywhere
+ *
+ * A file with no changes is shown as a diff made entirely of context lines, so the
+ * existing renderers handle it unmodified — see diff.ts `contextOnly`.
+ */
+export enum FileMode {
+  Changes,
+  All,
+}
+
+export function fileModeLabel(m: FileMode): string {
+  return m === FileMode.All ? 'ALL' : 'CHANGES'
 }
 
 /**
@@ -170,8 +191,27 @@ export class App {
   // Tree state.
   nodes: Node[] = []
   flat: FlatNode[] = []
-  collapsed = new Set<string>()
   cursor = 0
+  fileMode: FileMode = FileMode.Changes
+  /**
+   * Which folders are collapsed, kept per mode. One shared set would mean that
+   * collapsing things while browsing the whole repo silently rearranged the much
+   * shorter changed-files tree you came from.
+   */
+  private collapsedByMode: Record<FileMode, Set<string>> = {
+    [FileMode.Changes]: new Set(),
+    [FileMode.All]: new Set(),
+  }
+
+  get collapsed(): Set<string> {
+    return this.collapsedByMode[this.fileMode]
+  }
+
+  /**
+   * Whether ALL mode has had its one-time collapse applied. Only once: doing it on
+   * every toggle would throw away folders the user had deliberately opened.
+   */
+  private allModeCollapsed = false
 
   // Content state.
   selectedPath = ''
@@ -287,7 +327,10 @@ export class App {
 
   async loadFiles(): Promise<void> {
     try {
-      this.files = await loadChangedFiles(this.source)
+      this.files =
+        this.fileMode === FileMode.All
+          ? await loadAllFiles(this.source)
+          : await loadChangedFiles(this.source)
     } catch (err) {
       this.loading = false
       this.err = err as Error
@@ -326,6 +369,12 @@ export class App {
     aligned: AlignedRow[]
     stagedIdx: Set<number> | null
   }> {
+    // A file with no changes has no diff to ask git for; it is displayed as one
+    // made entirely of context lines instead. Only reachable in ALL mode.
+    if (!isChanged(file)) {
+      const combined = await this.readAsContext(file.path)
+      return { combined, aligned: align(combined), stagedIdx: null }
+    }
     const [combinedText, stagedText] = await Promise.all([
       loadDiff(this.source, file),
       loadStagedDiff(this.source, file).catch(() => ''),
@@ -337,6 +386,30 @@ export class App {
       stagedIdx = computeStagedIndices(combined, filterContentLines(parse(stagedText)))
     }
     return { combined, aligned, stagedIdx }
+  }
+
+  /**
+   * readAsContext loads a file for display in ALL mode.
+   *
+   * Two guards, because ALL mode lists whatever is in the repo — images, fixtures,
+   * lockfiles — not just source. Neither is worth rendering as text, and reading a
+   * huge one would stall the UI, so both get a one-line placeholder.
+   */
+  private async readAsContext(path: string): Promise<Line[]> {
+    const MAX_BYTES = 2 * 1024 * 1024
+    try {
+      const f = Bun.file(path)
+      const size = f.size
+      if (size > MAX_BYTES) {
+        return contextOnly(`(${Math.round(size / 1024)} KB — too large to display)`)
+      }
+      const text = await f.text()
+      // A NUL byte is the usual heuristic, and the one git itself uses.
+      if (text.includes('\u0000')) return contextOnly('(binary file)')
+      return contextOnly(text)
+    } catch (err) {
+      return contextOnly(`(cannot read: ${(err as Error).message})`)
+    }
   }
 
   async loadDiffFor(file: ChangedFile): Promise<void> {
@@ -426,6 +499,87 @@ export class App {
 
   // ------------------------------------------------------------- selection
 
+  /** True when the selected file actually differs; false for ALL-mode browsing. */
+  isFileChanged(path: string): boolean {
+    const f = this.findFile(path)
+    return f !== null && isChanged(f)
+  }
+
+  /**
+   * The view actually rendered, as opposed to the one Tab has cycled to.
+   *
+   * A file with no changes only makes sense in the post-change view: the other two
+   * would show the same text twice, or against an empty column. The stored
+   * preference is left alone so it comes back when you move to a file that has a
+   * real diff.
+   */
+  effectiveViewMode(): ViewMode {
+    if (this.selectedPath !== '' && !this.isFileChanged(this.selectedPath)) {
+      return ViewMode.Current
+    }
+    return this.viewMode
+  }
+
+  /**
+   * toggleFileMode switches the tree between the changed files and the whole repo.
+   *
+   * Entering ALL collapses every folder except the ones leading to the selected
+   * file — a repo of a few hundred files is unreadable fully expanded. Leaving it
+   * drops a selection that has no changes, since it would not be in the list.
+   */
+  async toggleFileMode(): Promise<void> {
+    this.fileMode = this.fileMode === FileMode.Changes ? FileMode.All : FileMode.Changes
+
+    // Going back to CHANGES with an untouched file selected would leave the diff
+    // pane showing something the tree no longer lists.
+    if (this.fileMode === FileMode.Changes && this.selectedPath !== '') {
+      if (!this.isFileChanged(this.selectedPath)) {
+        this.selectedPath = ''
+        this.contentCursor = 0
+        this.selectionAnchor = -1
+        this.focus = Focus.Tree
+      }
+    }
+
+    this.clearCaches()
+    // Must come before collapsing: the folders to collapse are the ones in the tree
+    // we are switching TO, and loadFiles is what builds it.
+    await this.loadFiles()
+
+    if (this.fileMode === FileMode.All && !this.allModeCollapsed) {
+      this.allModeCollapsed = true
+      this.collapseAllButPath(this.selectedPath)
+      this.flat = flatten(this.nodes, this.collapsed)
+    }
+    if (this.cursor >= this.flat.length) this.cursor = Math.max(0, this.flat.length - 1)
+    this.syncCursorToSelection()
+    this.render()
+  }
+
+  /** Collapse everything, then reopen just the folders on the way to `path`. */
+  private collapseAllButPath(path: string): void {
+    const collapsed = this.collapsed
+    collapsed.clear()
+    const walk = (nodes: Node[]): void => {
+      for (const n of nodes) {
+        if (n.type !== 'dir') continue
+        collapsed.add(n.path)
+        walk(n.children)
+      }
+    }
+    walk(this.nodes)
+    if (path === '') return
+    const parts = path.split('/')
+    for (let i = 1; i < parts.length; i++) collapsed.delete(parts.slice(0, i).join('/'))
+  }
+
+  /** Park the tree cursor on the selected file, if it is visible. */
+  syncCursorToSelection(): void {
+    if (this.selectedPath === '') return
+    const i = this.flat.findIndex((f) => f.node.type === 'file' && f.node.path === this.selectedPath)
+    if (i >= 0) this.cursor = i
+  }
+
   /** Inclusive [start, end] over rows in the active diff. */
   selectionRange(): [number, number] {
     if (this.selectionAnchor < 0) return [this.contentCursor, this.contentCursor]
@@ -442,7 +596,7 @@ export class App {
   activeRowCount(): number {
     const cached = this.cache.get(this.selectedPath)
     if (!cached) return 0
-    switch (this.viewMode) {
+    switch (this.effectiveViewMode()) {
       case ViewMode.Split:
         return cached.split.length
       case ViewMode.Current:
@@ -456,7 +610,7 @@ export class App {
   cursorLine(): number {
     const cached = this.cache.get(this.selectedPath)
     if (!cached) return 0
-    switch (this.viewMode) {
+    switch (this.effectiveViewMode()) {
       case ViewMode.Split:
         return cached.split[this.contentCursor]?.newNum ?? 0
       case ViewMode.Current:
@@ -478,9 +632,9 @@ export class App {
     if (!cached) return
 
     const rows: { newNum: number }[] =
-      this.viewMode === ViewMode.Split
+      this.effectiveViewMode() === ViewMode.Split
         ? cached.split
-        : this.viewMode === ViewMode.Current
+        : this.effectiveViewMode() === ViewMode.Current
           ? cached.current
           : cached.unified
     for (let i = 0; i < rows.length; i++) {
@@ -611,7 +765,9 @@ export class App {
    * thread list) — never from per-row render code.
    */
   async isThreadOutdated(t: StoredThread): Promise<boolean> {
-    if (this.findFile(t.file) === null) return true
+    // Deliberately NOT "the file isn't in the change set": in ALL mode a thread can
+    // legitimately sit on a file nobody has touched, and flagging those as stale
+    // would make the whole feature look broken.
     try {
       const file = Bun.file(t.file)
       if (!(await file.exists())) return true
@@ -632,7 +788,7 @@ export class App {
   contentLineLabel(): string {
     const cached = this.cache.get(this.selectedPath)
     if (!cached) return '—'
-    switch (this.viewMode) {
+    switch (this.effectiveViewMode()) {
       case ViewMode.Split: {
         const r = cached.split[this.contentCursor]
         if (!r) return '—'
