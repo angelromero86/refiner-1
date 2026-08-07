@@ -133,7 +133,7 @@ export class View {
       height: 3,
       flexShrink: 0,
     })
-    this.headerText = new TextRenderable(ctx, { content: '' })
+    this.headerText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     headerBox.add(this.headerText)
 
     const middle = new BoxRenderable(ctx, { flexDirection: 'row', flexGrow: 1 })
@@ -146,7 +146,7 @@ export class View {
       paddingRight: 1,
       flexShrink: 0,
     })
-    this.treeText = new TextRenderable(ctx, { content: '' })
+    this.treeText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.treeBox.add(this.treeText)
 
     this.contentBox = new BoxRenderable(ctx, {
@@ -157,13 +157,18 @@ export class View {
       paddingRight: 1,
       flexGrow: 1,
     })
-    this.contentText = new TextRenderable(ctx, { content: '' })
+    this.contentText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.contentBox.add(this.contentText)
 
     middle.add(this.treeBox)
     middle.add(this.contentBox)
 
-    this.footerText = new TextRenderable(ctx, { content: '', height: 1, flexShrink: 0 })
+    this.footerText = new TextRenderable(ctx, {
+      content: '',
+      height: 1,
+      flexShrink: 0,
+      wrapMode: 'none',
+    })
 
     root.add(headerBox)
     root.add(middle)
@@ -171,7 +176,7 @@ export class View {
 
     // ---- overlays -------------------------------------------------------
     this.modalBox = this.overlayBox()
-    this.modalText = new TextRenderable(ctx, { content: '' })
+    this.modalText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.composeInput = new TextareaRenderable(ctx, {
       height: COMPOSE_H,
       placeholder: 'Write a comment… (markdown ok)',
@@ -179,18 +184,18 @@ export class View {
       textColor: S.palette.foreground,
       focusedTextColor: S.palette.foreground,
     })
-    this.modalHint = new TextRenderable(ctx, { content: '', height: 1 })
+    this.modalHint = new TextRenderable(ctx, { content: '', height: 1, wrapMode: 'none' })
     // Order matters: text, then the widget, then the hint underneath it.
     this.modalBox.add(this.modalText)
     this.modalBox.add(this.composeInput)
     this.modalBox.add(this.modalHint)
 
     this.listBox = this.overlayBox()
-    this.listText = new TextRenderable(ctx, { content: '' })
+    this.listText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.listBox.add(this.listText)
 
     this.finderBox = this.overlayBox()
-    this.finderTitle = new TextRenderable(ctx, { content: '', height: 1 })
+    this.finderTitle = new TextRenderable(ctx, { content: '', height: 1, wrapMode: 'none' })
     this.finderInput = new InputRenderable(ctx, {
       placeholder:
         'search files (space-separated terms — "con task" matches "Controllers/Task.ts")',
@@ -198,7 +203,7 @@ export class View {
       textColor: S.palette.foreground,
       focusedTextColor: S.palette.foreground,
     })
-    this.finderText = new TextRenderable(ctx, { content: '' })
+    this.finderText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.finderBox.add(this.finderTitle)
     this.finderBox.add(this.finderInput)
     this.finderBox.add(this.finderText)
@@ -362,7 +367,16 @@ export class View {
   private buildTree(w: number, h: number): StyledText {
     const app = this.app
     if (app.loading) return rowsToStyledText([[chunk('Loading…', S.dim)]])
-    if (app.err) return rowsToStyledText([[chunk('Error: ' + app.err.message, S.del)]])
+    if (app.err) {
+      // Clipped to the pane: with wrapping off, an unclipped multi-line git error
+      // would just vanish past the edge instead of telling the user anything.
+      const msg = app.err.message.replaceAll('\n', ' ')
+      return rowsToStyledText(
+        wrapLine(`Error: ${msg}`, w)
+          .slice(0, h)
+          .map((line) => [chunk(line, S.del)]),
+      )
+    }
     if (app.flat.length === 0) return rowsToStyledText([[chunk('No changes.', S.dim)]])
 
     const maxStart = Math.max(0, app.flat.length - h)
