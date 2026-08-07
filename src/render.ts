@@ -9,8 +9,9 @@
 
 import type { TextChunk } from '@opentui/core'
 import { LineKind, RowKind, type AlignedRow, type Line } from './diff.ts'
-import { chunk, S, type CursorRowStyles, type Style } from './styles.ts'
-import { expandTabs, fitExact, truncate, width } from './text.ts'
+import { chunk, S, syntaxColor, type CursorRowStyles, type Style } from './styles.ts'
+import type { Run } from './syntax.ts'
+import { expandTabs, truncate, width } from './text.ts'
 
 const NUM_COL_WIDTH = 4
 const MARKER_WIDTH = 2 // "▶ " or "  "
@@ -69,6 +70,43 @@ function fitRow(chunks: TextChunk[], w: number, padStyle?: Style): TextChunk[] {
 }
 
 /**
+ * contentChunks splits a line's text into styled chunks along its syntax runs.
+ *
+ * Only the foreground changes: the background belongs to the row (add/del/staged/
+ * cursor), so a highlighted addition still reads as an addition. That is also why
+ * the diff's own green/red moves to being a wash behind the code rather than the
+ * color of the code itself.
+ *
+ * Runs are indices into the same (tab-expanded) text the caller renders, so they
+ * can be used to slice it directly.
+ */
+function contentChunks(text: string, base: Style, runs?: Run[]): TextChunk[] {
+  if (!runs || runs.length === 0 || !S.syntaxHighlight) return [chunk(text, base)]
+
+  const out: TextChunk[] = []
+  let at = 0
+  for (const run of runs) {
+    const start = Math.max(run.start, at)
+    const end = Math.min(run.end, text.length)
+    if (end <= start) continue
+    if (start > at) out.push(chunk(text.slice(at, start), base))
+    const fg = syntaxColor(run.group)
+    out.push(chunk(text.slice(start, end), fg ? { ...base, fg } : base))
+    at = end
+  }
+  if (at < text.length) out.push(chunk(text.slice(at), base))
+  return out.length > 0 ? out : [chunk(text, base)]
+}
+
+/** Force a chunk list to exactly `w` columns — used for split-view sides. */
+function fitChunksExact(chunks: TextChunk[], w: number, padStyle: Style): TextChunk[] {
+  const visible = chunksWidth(chunks)
+  if (visible > w) return truncateChunks(chunks, w)
+  if (visible < w) return [...chunks, chunk(' '.repeat(w - visible), padStyle)]
+  return chunks
+}
+
+/**
  * cursorStylesForLine picks the cursor-row variant for a unified line, taking
  * staged state into account. Variants share the cursor bg so the selection color
  * prevails; the fg follows the line's kind.
@@ -122,7 +160,12 @@ export interface RowState {
   newStaged?: boolean
 }
 
-export function renderUnifiedRow(l: Line, st: RowState, w: number): TextChunk[] {
+export function renderUnifiedRow(
+  l: Line,
+  st: RowState,
+  w: number,
+  runs?: Run[],
+): TextChunk[] {
   let text = expandTabs(l.text)
   // Move the +/- marker out of the content into the opposite empty line-number
   // slot. Context text just loses its leading space.
@@ -154,7 +197,7 @@ export function renderUnifiedRow(l: Line, st: RowState, w: number): TextChunk[] 
       [
         chunk(st.isCursor ? '▶ ' : '  ', cs.marker),
         chunk(gutter, gutterStyle),
-        chunk(text, cs.content),
+        ...contentChunks(text, cs.content, runs),
       ],
       w,
       cs.pad,
@@ -186,7 +229,7 @@ export function renderUnifiedRow(l: Line, st: RowState, w: number): TextChunk[] 
   if (st.hasComment) gutterStyle = S.commentGutter
 
   return fitRow(
-    [chunk('  '), chunk(gutter, gutterStyle), chunk(text, contentStyle)],
+    [chunk('  '), chunk(gutter, gutterStyle), ...contentChunks(text, contentStyle, runs)],
     w,
     padStyle,
   )
@@ -197,7 +240,12 @@ export function renderUnifiedRow(l: Line, st: RowState, w: number): TextChunk[] 
  * only (no dels), so a single line-number column is enough. A leading `+` on add
  * lines preserves the cue that the line is part of the diff.
  */
-export function renderCurrentRow(l: Line, st: RowState, w: number): TextChunk[] {
+export function renderCurrentRow(
+  l: Line,
+  st: RowState,
+  w: number,
+  runs?: Run[],
+): TextChunk[] {
   let text = expandTabs(l.text)
   let sign = ' '
   switch (l.kind) {
@@ -220,7 +268,7 @@ export function renderCurrentRow(l: Line, st: RowState, w: number): TextChunk[] 
       [
         chunk(st.isCursor ? '▶ ' : '  ', cs.marker),
         chunk(gutter, gutterStyle),
-        chunk(text, cs.content),
+        ...contentChunks(text, cs.content, runs),
       ],
       w,
       cs.pad,
@@ -247,7 +295,7 @@ export function renderCurrentRow(l: Line, st: RowState, w: number): TextChunk[] 
   if (st.hasComment) gutterStyle = S.commentGutter
 
   return fitRow(
-    [chunk('  '), chunk(gutter, gutterStyle), chunk(text, contentStyle)],
+    [chunk('  '), chunk(gutter, gutterStyle), ...contentChunks(text, contentStyle, runs)],
     w,
     padStyle,
   )
@@ -258,12 +306,16 @@ export function renderSplitRow(
   st: RowState,
   sideWidth: number,
   w: number,
+  oldRuns?: Run[],
+  newRuns?: Run[],
 ): TextChunk[] {
   if (sideWidth < 1) sideWidth = 1
   const oldGutter = padNum(r.oldNum) + ' '
   const newGutter = padNum(r.newNum) + ' '
-  const oldText = fitExact(r.oldText, sideWidth)
-  const newText = fitExact(r.newText, sideWidth)
+  // Tabs are expanded here rather than inside a fit helper so the text handed to
+  // contentChunks is the exact string the syntax runs were computed against.
+  const oldText = expandTabs(r.oldText)
+  const newText = expandTabs(r.newText)
   const oldStaged = st.oldStaged ?? false
   const newStaged = st.newStaged ?? false
 
@@ -285,10 +337,10 @@ export function renderSplitRow(
       [
         chunk(st.isCursor ? '▶ ' : '  ', csOld.marker),
         chunk(oldGutter, oldGutterStyle),
-        chunk(oldText, oldContentStyle),
+        ...fitChunksExact(contentChunks(oldText, oldContentStyle, oldRuns), sideWidth, oldContentStyle),
         chunk(' │ ', S.ctxCursorRow.pad),
         chunk(newGutter, newGutterStyle),
-        chunk(newText, newContentStyle),
+        ...fitChunksExact(contentChunks(newText, newContentStyle, newRuns), sideWidth, newContentStyle),
       ],
       w,
       csNew.pad,
@@ -297,9 +349,9 @@ export function renderSplitRow(
 
   const body = [
     chunk('  '),
-    ...renderSplitSide(oldGutter, oldText, r.kind, true, oldStaged, st.hasComment),
+    ...renderSplitSide(oldGutter, oldText, sideWidth, r.kind, true, oldStaged, st.hasComment, oldRuns),
     chunk(' │ ', S.gutter),
-    ...renderSplitSide(newGutter, newText, r.kind, false, newStaged, st.hasComment),
+    ...renderSplitSide(newGutter, newText, sideWidth, r.kind, false, newStaged, st.hasComment, newRuns),
   ]
   return chunksWidth(body) > w ? truncateChunks(body, w) : body
 }
@@ -307,10 +359,12 @@ export function renderSplitRow(
 function renderSplitSide(
   gutter: string,
   text: string,
+  sideWidth: number,
   kind: RowKind,
   isOld: boolean,
   staged: boolean,
   hasComment: boolean,
+  runs?: Run[],
 ): TextChunk[] {
   const delSide = isOld && (kind === RowKind.Del || kind === RowKind.Mod)
   const addSide = !isOld && (kind === RowKind.Add || kind === RowKind.Mod)
@@ -333,7 +387,10 @@ function renderSplitSide(
   else if (hasComment && emptySide) contentStyle = S.commentGutter
   else contentStyle = S.text
 
-  return [chunk(gutter, gutterStyle), chunk(text, contentStyle)]
+  return [
+    chunk(gutter, gutterStyle),
+    ...fitChunksExact(contentChunks(text, contentStyle, runs), sideWidth, contentStyle),
+  ]
 }
 
 /** Per-side text width for a given total content width in split view. */

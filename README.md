@@ -24,6 +24,9 @@ Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
 
 - **Diff viewer** — tres vistas: unificada, split y "normal" (el archivo tal como
   queda después del cambio). Scroll fluido, sin re-render de todo el buffer.
+- **Syntax highlighting** — tree-sitter sobre el diff, con paleta **Gruvbox Dark**.
+  Los fondos verde/rojo de añadido/borrado quedan como wash y el código conserva sus
+  colores de token encima, así que se lee como código y no como un bloque teñido.
 - **Staging line-level** — `space` stagea/unstagea la línea o la selección bajo el
   cursor; parte el patch y se lo pasa a `git apply --cached`.
 - **Threads de revisión** — anclados a `(file, start, end)`, persistidos en
@@ -33,7 +36,8 @@ Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
   add) más el thumb del viewport, en la columna derecha del panel.
 - **Fuzzy finder** — `p` abre un picker multi-término: `con task` encuentra
   `Controllers/Task.ts`.
-- **Tema configurable** — paleta semántica en `~/.config/refiner/config.toml`.
+- **Tema configurable** — paleta semántica + colores de sintaxis en
+  `~/.config/refiner/config.toml`.
 - **Integración con tmux** — `e` abre nvim en el archivo, `g` abre lazygit, ambos en
   `display-popup` cuando hay sesión tmux.
 - **Dos modos**:
@@ -54,9 +58,15 @@ Para usarlo desde cualquier sitio, compila un binario único (no necesita Bun ni
 `node_modules` en la máquina destino):
 
 ```bash
-bun run build            # → dist/refiner (~66 MB, autónomo)
-mv dist/refiner ~/.local/bin/
+bun run build            # → dist/refiner (~66 MB) + dist/refiner-assets/
+cp -R dist/refiner dist/refiner-assets ~/.local/bin/
 ```
+
+**Copia las dos cosas.** El binario lleva dentro el renderer nativo, pero el worker
+de tree-sitter no puede arrancar desde el filesystem virtual de Bun, así que la
+runtime WASM y las gramáticas (~3.7 MB) van en `refiner-assets/` al lado del
+ejecutable. refiner lo busca ahí al arrancar; si no está, funciona todo igual
+**menos** el syntax highlighting.
 
 O ejecútalo directamente desde el repo:
 
@@ -106,34 +116,62 @@ El footer lista los atajos del panel enfocado; cambia según dónde estés.
 
 ## Personalizar
 
-El tema vive en `~/.config/refiner/config.toml` (XDG). Si no existe, se usan los
-defaults. Los campos ausentes caen a default, así que puedes poner solo lo que
-quieras cambiar.
+El tema por defecto es **Gruvbox Dark**. Vive en `~/.config/refiner/config.toml`
+(XDG); si no existe se usan los defaults, y los campos ausentes caen a default, así
+que puedes poner solo lo que quieras cambiar.
 
 ```toml
 # Paleta semántica (los nombres describen el ROL, no el color).
-primary    = "#d48472"   # nombre de app, borde del header, borde de modales
-accent     = "#d99a3a"   # hotkeys del footer, badge M, dirs, ▶ marker
-focus      = "#c4ba6e"   # panel enfocado, label de modo
-muted      = "#4a3a2e"   # gutter de números, borde inactivo
-foreground = "#e6cfa8"   # texto por defecto (contexto, modales, snippets)
+primary    = "#fe8019"   # nombre de app, borde del header, borde de modales
+accent     = "#fabd2f"   # hotkeys del footer, badge M, dirs, ▶ marker
+focus      = "#8ec07c"   # panel enfocado, label de modo
+muted      = "#7c6f64"   # gutter de números, borde inactivo
+foreground = "#ebdbb2"   # texto por defecto (contexto, modales, snippets)
 
-# Hunks del diff
-add_bg  = "#0d2117"
-del_bg  = "#211517"
-add_fg  = "#56d364"      # también pinta el badge A en el árbol
-del_fg  = "#f85149"      # también pinta D, errores y el label OUTDATED
+# Hunks del diff — fondos suaves para que el código se lea encima
+add_bg  = "#32361a"
+del_bg  = "#402120"
+add_fg  = "#b8bb26"      # signo + del gutter, badge A en el árbol
+del_fg  = "#fb4934"      # signo -, badge D, errores y el label OUTDATED
 
-staged_bg = "#0d1a2e"
-staged_fg = "#4493f8"
+staged_bg = "#23303d"
+staged_fg = "#83a598"
 
 # Indicador "hay comentarios aquí" (gutter + ● en árbol + banda del minimapa)
-comment       = "#5a2638"
-comment_label = "#f5e6c8"   # texto sobre el fondo del gutter
+comment       = "#4c2b3d"
+comment_label = "#fbf1c7"   # texto sobre el fondo del gutter
 
-cursor_bg  = "#26211e"   # fila bajo el cursor
-background = "#1c1714"   # fondo de los modales (deben ser opacos)
+cursor_bg  = "#3c3836"   # fila bajo el cursor
+background = "#282828"   # fondo de los modales (deben ser opacos)
+
+# Apágalo para volver al add/del en verde/rojo plano, sin colores de token.
+syntax_highlight = true
+
+# Colores de sintaxis por grupo de captura de tree-sitter. La búsqueda cae por
+# puntos: `keyword.function` usa `keyword` si no tiene entrada propia, igual que en
+# los editores — así recolorear una cosa son dos líneas, no una tabla entera.
+[syntax]
+keyword     = "#fb4934"
+function    = "#b8bb26"
+string      = "#b8bb26"
+number      = "#d3869b"
+constant    = "#d3869b"
+type        = "#fabd2f"
+variable    = "#ebdbb2"
+operator    = "#ebdbb2"
+punctuation = "#a89984"
+comment     = "#928374"
+tag         = "#8ec07c"
 ```
+
+En `themes/` hay paletas alternativas listas para copiar — `omarchy.toml` es la
+ochre cálida con la que refiner nació.
+
+**Lenguajes.** El highlighting usa las gramáticas que trae OpenTUI:
+**TypeScript** (`.ts .tsx .mts .cts`), **JavaScript** (`.js .jsx .mjs .cjs`),
+**Markdown** y **Zig**. Cualquier otra extensión se muestra sin colorear, sin
+errores ni ruido. OpenTUI puede descargar más gramáticas, pero eso implicaría que
+refiner hiciera peticiones de red por su cuenta, así que no lo hace.
 
 Las preferencias que refiner escribe él mismo (ancho del árbol, auto-hide) van
 aparte, en `~/.config/refiner/state.json`. La vista **no** se persiste: cada sesión

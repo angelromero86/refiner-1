@@ -11,7 +11,7 @@
  */
 
 import { RGBA, createTextAttributes, type TextChunk } from '@opentui/core'
-import type { Theme } from './theme.ts'
+import { defaultTheme, type Theme } from './theme.ts'
 import type { Status } from './git.ts'
 
 export interface Style {
@@ -119,6 +119,9 @@ export interface Styles {
   delCursorRow: CursorRowStyles
   stagedCursorRow: CursorRowStyles
   ctxCursorRow: CursorRowStyles
+
+  /** Whether diff content should be syntax-colored at all. */
+  syntaxHighlight: boolean
 }
 
 /**
@@ -126,26 +129,53 @@ export interface Styles {
  * imported it sees the new colors — the same shape the Go package-level style
  * vars had.
  */
-export const S: Styles = buildStyles({
-  primary: '#d48472',
-  accent: '#d99a3a',
-  focus: '#c4ba6e',
-  muted: '#4a3a2e',
-  foreground: '#e6cfa8',
-  addBg: '#0d2117',
-  delBg: '#211517',
-  addFg: '#56d364',
-  delFg: '#f85149',
-  stagedBg: '#0d1a2e',
-  stagedFg: '#4493f8',
-  comment: '#5a2638',
-  commentLabel: '#f5e6c8',
-  cursorBg: '#26211e',
-  background: '#1c1714',
-})
+export const S: Styles = buildStyles(defaultTheme())
 
 export function applyTheme(t: Theme): void {
   Object.assign(S, buildStyles(t))
+  syntaxColors = resolveSyntax(t.syntax)
+  syntaxCache.clear()
+}
+
+/** Resolved capture-group colors, and the memo for dotted-fallback lookups. */
+let syntaxColors = resolveSyntax(defaultTheme().syntax)
+const syntaxCache = new Map<string, RGBA | undefined>()
+
+function resolveSyntax(spec: Record<string, string>): Map<string, RGBA> {
+  const out = new Map<string, RGBA>()
+  for (const [group, hex] of Object.entries(spec)) {
+    try {
+      out.set(group, RGBA.fromHex(hex))
+    } catch {
+      // A bad color in the config shouldn't take the whole palette down.
+    }
+  }
+  return out
+}
+
+/**
+ * syntaxColor resolves a tree-sitter capture group to a color, walking back along
+ * dots: `keyword.function.builtin` tries the full name, then `keyword.function`,
+ * then `keyword`. Returns undefined when nothing matches, which leaves the row's
+ * own diff color in place.
+ */
+export function syntaxColor(group: string): RGBA | undefined {
+  const hit = syntaxCache.get(group)
+  if (hit !== undefined || syntaxCache.has(group)) return hit
+  let name = group
+  let found: RGBA | undefined
+  for (;;) {
+    const c = syntaxColors.get(name)
+    if (c) {
+      found = c
+      break
+    }
+    const dot = name.lastIndexOf('.')
+    if (dot < 0) break
+    name = name.slice(0, dot)
+  }
+  syntaxCache.set(group, found)
+  return found
 }
 
 function buildStyles(t: Theme): Styles {
@@ -240,6 +270,8 @@ function buildStyles(t: Theme): Styles {
     // Guide lines (│ ├ └) use the soft cursor color so they read as tree
     // structure without competing with file names.
     treeGuide: { fg: cursorBg },
+
+    syntaxHighlight: t.syntaxHighlight,
 
     addCursorRow: buildCursor(addFg),
     delCursorRow: buildCursor(delFg),

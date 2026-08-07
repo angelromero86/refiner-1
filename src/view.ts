@@ -464,6 +464,9 @@ export class View {
     const focused = app.focus === Focus.Content
     const [selStart, selEnd] = app.selectionRange()
     const stagedSet = app.staged.get(app.selectedPath) ?? new Set<number>()
+    // Deletions only exist in the pre-change document, additions and context in
+    // the post-change one — so each row looks its runs up on the matching side.
+    const hl = app.activeHighlights()
 
     const rows: TextChunk[][] = []
     const from = app.contentScroll
@@ -487,6 +490,8 @@ export class View {
               } satisfies RowState,
               sideW,
               contentW,
+              hl.old.get(row.oldNum),
+              hl.new.get(row.newNum),
             ),
           )
         }
@@ -507,6 +512,7 @@ export class View {
                 staged: stagedSet.has(cached.currentIdx[i]),
               } satisfies RowState,
               contentW,
+              hl.new.get(line.newNum),
             ),
           )
         }
@@ -527,6 +533,7 @@ export class View {
                 staged: stagedSet.has(i),
               } satisfies RowState,
               contentW,
+              line.kind === LineKind.Del ? hl.old.get(line.oldNum) : hl.new.get(line.newNum),
             ),
           )
         }

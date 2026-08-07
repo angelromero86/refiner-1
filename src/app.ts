@@ -37,6 +37,7 @@ import {
 } from './git.ts'
 import { build as buildTree, flatten, type DirNode, type FlatNode, type Node } from './tree.ts'
 import { Store, type StoredThread } from './comments.ts'
+import { highlightDiff, NO_HIGHLIGHTS, type DiffHighlights } from './syntax.ts'
 import { defaultUIState, loadState, saveState } from './state.ts'
 
 export enum Focus {
@@ -183,6 +184,12 @@ export class App {
   /** path → set of unified-line indices currently staged in git. */
   staged = new Map<string, Set<number>>()
   loadingDiff = new Set<string>()
+  /**
+   * path → syntax runs for the file's old and new sides. Populated after the diff
+   * itself, because parsing is slower than rendering and must never delay the
+   * first paint — the file shows uncolored for a frame, then colors in.
+   */
+  highlights = new Map<string, DiffHighlights>()
 
   threads: Store
   modal: ThreadModal | null = null
@@ -245,6 +252,7 @@ export class App {
     this.cache.clear()
     this.staged.clear()
     this.loadingDiff.clear()
+    this.highlights.clear()
   }
 
   findFile(path: string): ChangedFile | null {
@@ -334,6 +342,28 @@ export class App {
       this.loadingDiff.delete(file.path)
     }
     this.render()
+    void this.loadHighlights(file.path)
+  }
+
+  /**
+   * loadHighlights parses the file for syntax colors and repaints when done.
+   * Best-effort and non-blocking: an unsupported language or a tree-sitter failure
+   * just leaves the diff in its plain colors.
+   */
+  private async loadHighlights(path: string): Promise<void> {
+    if (this.highlights.has(path)) return
+    const cached = this.cache.get(path)
+    if (!cached) return
+    const hl = await highlightDiff(path, cached.unified)
+    // The cache may have been dropped while we were parsing (staging, refresh).
+    if (!this.cache.has(path)) return
+    this.highlights.set(path, hl)
+    if (path === this.selectedPath) this.render()
+  }
+
+  /** Syntax runs for the selected file; empty when unavailable. */
+  activeHighlights(): DiffHighlights {
+    return this.highlights.get(this.selectedPath) ?? NO_HIGHLIGHTS
   }
 
   /** ensureDiffLoaded kicks off a load unless it is cached or already running. */

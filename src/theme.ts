@@ -70,6 +70,21 @@ export interface Theme {
   cursorBg: string
 
   /**
+   * Whether to syntax-highlight diff content. When off, add/del lines render in
+   * flat green/red as they did before highlighting existed.
+   */
+  syntaxHighlight: boolean
+
+  /**
+   * Syntax colors by tree-sitter capture group.
+   *
+   * Lookup falls back along dots, so `keyword.function` uses `keyword` unless it
+   * is given its own entry — the same rule editors use, which keeps a custom
+   * palette to a handful of lines instead of an exhaustive table.
+   */
+  syntax: Record<string, string>
+
+  /**
    * Background — the fill behind modal overlays.
    *
    * The panes themselves stay transparent and show the terminal through, exactly
@@ -84,29 +99,80 @@ export interface Theme {
 
 export function defaultTheme(): Theme {
   return {
-    primary: '#d48472',
-    accent: '#d99a3a',
-    focus: '#c4ba6e',
-    muted: '#4a3a2e',
-    foreground: '#e6cfa8',
+    // Gruvbox Dark. Chrome uses the warm bright accents; the diff backgrounds are
+    // gruvbox's own DiffAdd/DiffDelete tints so added and removed lines read as
+    // washes rather than blocks of colored text — which is what makes room for
+    // syntax colors on top of them.
+    primary: '#fe8019', // bright orange
+    accent: '#fabd2f', // bright yellow
+    focus: '#8ec07c', // bright aqua
+    muted: '#7c6f64', // bg4 — line numbers stay legible, idle borders stay quiet
+    foreground: '#ebdbb2', // fg1
 
-    addBg: '#0d2117',
-    delBg: '#211517',
-    addFg: '#56d364',
-    delFg: '#f85149',
-    stagedBg: '#0d1a2e',
-    stagedFg: '#4493f8',
+    addBg: '#32361a',
+    delBg: '#402120',
+    addFg: '#b8bb26', // bright green
+    delFg: '#fb4934', // bright red
+    stagedBg: '#23303d',
+    stagedFg: '#83a598', // bright blue
 
-    // Dark pink — distinctive enough that "this line has a comment" reads
-    // instantly without overlapping any other UI state color.
-    comment: '#5a2638',
-    commentLabel: '#f5e6c8',
+    comment: '#4c2b3d',
+    commentLabel: '#fbf1c7', // fg0
 
-    // Just barely lighter than the omarchy ochre terminal bg (#1c1714): each
-    // channel bumped by 0x0a to keep the warm hue but separate the row.
-    cursorBg: '#26211e',
+    cursorBg: '#3c3836', // bg1 — the classic gruvbox cursorline
+    background: '#282828', // bg0
 
-    background: '#1c1714',
+    syntaxHighlight: true,
+    syntax: defaultSyntax(),
+  }
+}
+
+/**
+ * Capture group → color, following gruvbox.nvim's assignments. Only the roots are
+ * listed; dotted children inherit (see Theme.syntax).
+ */
+export function defaultSyntax(): Record<string, string> {
+  return {
+    keyword: '#fb4934', // red
+    conditional: '#fb4934',
+    repeat: '#fb4934',
+    label: '#fb4934',
+    exception: '#fb4934',
+
+    function: '#b8bb26', // green
+    string: '#b8bb26',
+    character: '#b8bb26',
+
+    number: '#d3869b', // purple
+    boolean: '#d3869b',
+    float: '#d3869b',
+    constant: '#d3869b',
+
+    type: '#fabd2f', // yellow
+    constructor: '#fabd2f',
+    attribute: '#fabd2f',
+    annotation: '#fabd2f',
+
+    variable: '#ebdbb2', // fg1
+    property: '#ebdbb2',
+    parameter: '#ebdbb2',
+    field: '#ebdbb2',
+    namespace: '#ebdbb2',
+    module: '#ebdbb2',
+    operator: '#ebdbb2',
+
+    tag: '#8ec07c', // aqua
+    include: '#8ec07c',
+    preproc: '#8ec07c',
+
+    punctuation: '#a89984', // fg4 — present but recessive
+    comment: '#928374', // gray
+    text: '#ebdbb2',
+    title: '#fabd2f',
+    emphasis: '#ebdbb2',
+    literal: '#b8bb26',
+    reference: '#8ec07c',
+    uri: '#83a598',
   }
 }
 
@@ -121,8 +187,8 @@ export function configPath(): string {
   return join(configDir(), 'config.toml')
 }
 
-/** snake_case in the file → camelCase on the Theme. */
-const KEY_MAP: Record<string, keyof Theme> = {
+/** snake_case in the file → camelCase on the Theme. Color fields only. */
+const KEY_MAP: Record<string, ColorKey> = {
   primary: 'primary',
   accent: 'accent',
   focus: 'focus',
@@ -139,6 +205,9 @@ const KEY_MAP: Record<string, keyof Theme> = {
   cursor_bg: 'cursorBg',
   background: 'background',
 }
+
+/** The Theme fields that hold a single color string. */
+type ColorKey = Exclude<keyof Theme, 'syntax' | 'syntaxHighlight'>
 
 /**
  * loadTheme reads the config file, merging non-empty fields over the defaults.
@@ -158,10 +227,22 @@ export async function loadTheme(path = configPath()): Promise<{ theme: Theme; wa
   }
   if (typeof parsed !== 'object' || parsed === null) return { theme: defaults }
 
-  const theme = { ...defaults }
+  const obj = parsed as Record<string, unknown>
+  const theme = { ...defaults, syntax: { ...defaults.syntax } }
   for (const [fileKey, themeKey] of Object.entries(KEY_MAP)) {
-    const v = (parsed as Record<string, unknown>)[fileKey]
+    const v = obj[fileKey]
     if (typeof v === 'string' && v !== '') theme[themeKey] = v
+  }
+  if (typeof obj['syntax_highlight'] === 'boolean') {
+    theme.syntaxHighlight = obj['syntax_highlight']
+  }
+  // `[syntax]` merges over the defaults rather than replacing them, so recoloring
+  // one group doesn't blank out every other.
+  const syntax = obj['syntax']
+  if (typeof syntax === 'object' && syntax !== null) {
+    for (const [group, color] of Object.entries(syntax as Record<string, unknown>)) {
+      if (typeof color === 'string' && color !== '') theme.syntax[group] = color
+    }
   }
   return { theme }
 }

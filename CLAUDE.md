@@ -50,6 +50,33 @@ maintains for drift tracking) and keep the serialization at
 - Widths come from `Bun.stringWidth` (`src/text.ts`), not `String.length` — the Go
   original measured bytes in `fit()` and misaligned any row with non-ASCII.
 
+## Syntax highlighting
+
+`src/syntax.ts` highlights the diff as **two whole documents** (post-change =
+context+additions, pre-change = context+deletions) and each row looks up its runs by
+line number. Per-row parsing would produce nonsense for anything spanning lines.
+
+Three things must stay in lockstep or the colors land on the wrong characters:
+
+- **Tabs are expanded before highlighting**, exactly as the renderers expand them.
+  A raw tab in the document but `    ` on screen offsets every later column.
+- **Tree-sitter offsets are UTF-16 code units**, not bytes — verified against its own
+  parser. So the runs can slice the JS string directly. Don't "fix" this to bytes.
+- **Runs are string indices, not display columns.** Slice text by them; never use
+  them for padding math. Width still comes from `Bun.stringWidth`.
+
+Overlapping captures are normal (tree-sitter emits `variable`, then `type`, then
+`constant` for one span). They're painted into a per-column array so the most
+specific wins, then collapsed back into runs.
+
+`configureAssetRoot()` exists because OpenTUI resolves its tree-sitter assets
+relative to its own module URL, which under Bun is the global install cache where
+the `web-tree-sitter` peer dep isn't reachable. Setting `OTUI_ASSET_ROOT` to a real
+node_modules (or the shipped sidecar) fixes it. A compiled binary additionally can't
+spawn the parser worker from Bun's virtual filesystem, which is why `bun run build`
+emits `dist/refiner-assets/` — ship it alongside the binary or highlighting silently
+switches off (by design: `highlightDiff` never throws).
+
 ## Layout
 
 `src/app.ts` holds all state and the geometry helpers; `src/view.ts` draws and owns

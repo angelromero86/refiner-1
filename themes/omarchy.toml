@@ -1,0 +1,27 @@
+# The palette refiner shipped with before Gruvbox Dark became the default —
+# the warm ochre scheme inherited from eleview. Copy to
+# ~/.config/refiner/config.toml to use it.
+#
+# Only the chrome is listed. Syntax colors fall back to the built-in Gruvbox
+# groups, which sit comfortably on this palette; add a [syntax] table to change
+# any of them.
+
+primary    = "#d48472"   # app name, header border, modal borders
+accent     = "#d99a3a"   # footer hotkeys, M badge, dirs, ▶ marker
+focus      = "#c4ba6e"   # focused pane, mode label
+muted      = "#4a3a2e"   # line-number gutter, idle border
+foreground = "#e6cfa8"   # default text
+
+add_bg  = "#0d2117"
+del_bg  = "#211517"
+add_fg  = "#56d364"
+del_fg  = "#f85149"
+
+staged_bg = "#0d1a2e"
+staged_fg = "#4493f8"
+
+comment       = "#5a2638"
+comment_label = "#f5e6c8"
+
+cursor_bg  = "#26211e"
+background = "#1c1714"

@@ -3,9 +3,10 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "refiner",
+      "name": "refiner-tui",
       "dependencies": {
         "@opentui/core": "^0.5.1",
+        "web-tree-sitter": "0.25.10",
       },
       "devDependencies": {
         "@types/bun": "^1.3.14",

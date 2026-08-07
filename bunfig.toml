@@ -1,0 +1,7 @@
+[install]
+# @opentui/core resolves its `web-tree-sitter` peer dep (for the tree-sitter WASM
+# runtime that powers syntax highlighting) relative to its own realpath. With Bun's
+# default linker that realpath lands in the global cache, where the peer isn't
+# reachable, and highlighting fails to initialize. Copying packages into
+# node_modules keeps the resolution local.
+backend = "copyfile"

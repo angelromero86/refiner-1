@@ -11,6 +11,7 @@ import { App } from './app.ts'
 import { installKeyHandling } from './dispatch.ts'
 import { gitUserName, Mode, type Source } from './git.ts'
 import { applyTheme } from './styles.ts'
+import { configureAssetRoot } from './syntax.ts'
 import { loadTheme } from './theme.ts'
 import { View } from './view.ts'
 
@@ -29,6 +30,9 @@ async function main(): Promise<void> {
     process.stdout.write(USAGE)
     return
   }
+
+  // Must run before anything reaches into OpenTUI's asset resolution.
+  configureAssetRoot()
 
   const { theme, warning } = await loadTheme()
   if (warning) process.stderr.write(`warning: ${warning}\n`)
