@@ -78,6 +78,9 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
       app.quitConfirm = true
       return true
     case 'r':
+      // An explicit refresh is the user saying "start over", so it also dismisses
+      // whatever error is on screen.
+      app.err = null
       void app.refresh()
       return true
     case 'g':

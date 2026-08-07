@@ -1,5 +1,6 @@
 /**
- * The customizable color palette, read from `~/.config/refiner/config.toml`.
+ * The customizable color palette. src/config.ts reads the file; this module owns
+ * the shape, the defaults and the file-key mapping.
  *
  * Each field is named for its UI role, not its hue, so a config edit reads as
  * intent ("make the focus color orange") rather than a color swap ("change cyan
@@ -188,7 +189,7 @@ export function configPath(): string {
 }
 
 /** snake_case in the file → camelCase on the Theme. Color fields only. */
-const KEY_MAP: Record<string, ColorKey> = {
+export const THEME_KEY_MAP: Record<string, ColorKey> = {
   primary: 'primary',
   accent: 'accent',
   focus: 'focus',
@@ -208,41 +209,3 @@ const KEY_MAP: Record<string, ColorKey> = {
 
 /** The Theme fields that hold a single color string. */
 type ColorKey = Exclude<keyof Theme, 'syntax' | 'syntaxHighlight'>
-
-/**
- * loadTheme reads the config file, merging non-empty fields over the defaults.
- * A missing file is not an error — you get the defaults. A malformed file is
- * reported so the user knows why their colors didn't apply.
- */
-export async function loadTheme(path = configPath()): Promise<{ theme: Theme; warning?: string }> {
-  const defaults = defaultTheme()
-  const file = Bun.file(path)
-  if (!(await file.exists())) return { theme: defaults }
-
-  let parsed: unknown
-  try {
-    parsed = Bun.TOML.parse(await file.text())
-  } catch (err) {
-    return { theme: defaults, warning: `decoding ${path}: ${(err as Error).message}` }
-  }
-  if (typeof parsed !== 'object' || parsed === null) return { theme: defaults }
-
-  const obj = parsed as Record<string, unknown>
-  const theme = { ...defaults, syntax: { ...defaults.syntax } }
-  for (const [fileKey, themeKey] of Object.entries(KEY_MAP)) {
-    const v = obj[fileKey]
-    if (typeof v === 'string' && v !== '') theme[themeKey] = v
-  }
-  if (typeof obj['syntax_highlight'] === 'boolean') {
-    theme.syntaxHighlight = obj['syntax_highlight']
-  }
-  // `[syntax]` merges over the defaults rather than replacing them, so recoloring
-  // one group doesn't blank out every other.
-  const syntax = obj['syntax']
-  if (typeof syntax === 'object' && syntax !== null) {
-    for (const [group, color] of Object.entries(syntax as Record<string, unknown>)) {
-      if (typeof color === 'string' && color !== '') theme.syntax[group] = color
-    }
-  }
-  return { theme }
-}

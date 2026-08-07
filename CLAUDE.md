@@ -106,6 +106,24 @@ exits immediately from anywhere, which is the deliberate escape hatch. Nothing i
 lost on quit — threads are written on every edit, staging lives in git — so the
 confirmation guards against the fat-finger, not against data loss.
 
+## External processes
+
+`src/externals.ts` has three paths: a tmux `display-popup`, a zellij floating pane,
+or suspend-the-renderer. Only the last is full-screen, and that is not a choice —
+without a multiplexer nothing can hand a child process a sub-rectangle of the
+terminal. Doing it ourselves would mean a PTY (`Bun.Terminal`, which Bun does
+provide) plus a VT emulator to paint the child's output, plus a prefix key to
+arbitrate keystrokes. That is rebuilding tmux; don't.
+
+In the multiplexer paths the child must NOT inherit our stdio — the renderer still
+owns the terminal, so a tmux error message would be painted straight over the UI.
+Its output is captured and routed to the error banner instead.
+
+**`loadFiles()` must not clear `app.err`.** Staging and external processes record an
+error and then refresh; clearing on a successful reload wiped the error they had
+just set, which is why failures used to vanish silently. Only the explicit `r`
+binding clears the banner.
+
 ## Layout
 
 `src/app.ts` holds all state and the geometry helpers; `src/view.ts` draws and owns

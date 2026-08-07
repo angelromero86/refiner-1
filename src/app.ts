@@ -39,6 +39,7 @@ import { build as buildTree, flatten, type DirNode, type FlatNode, type Node } f
 import { Store, type StoredThread } from './comments.ts'
 import { highlightDiff, NO_HIGHLIGHTS, type DiffHighlights } from './syntax.ts'
 import { defaultUIState, loadState, saveState } from './state.ts'
+import { defaultConfig, type EditorConfig, type PopupConfig } from './config.ts'
 
 export enum Focus {
   Tree,
@@ -214,6 +215,10 @@ export class App {
 
   /** Author label for new comments; resolved once at startup. */
   author = 'anon'
+  /** Which editor `e` launches, and how it takes a line number. */
+  editor: EditorConfig = defaultConfig().editor
+  /** How big the floating window for `e` and `g` should be. */
+  popup: PopupConfig = defaultConfig().popup
 
   inputs: TextInputs = NO_INPUTS
   /** Set by the view; invoked after any state mutation. */
@@ -276,7 +281,6 @@ export class App {
   async loadFiles(): Promise<void> {
     try {
       this.files = await loadChangedFiles(this.source)
-      this.err = null
     } catch (err) {
       this.loading = false
       this.err = err as Error
@@ -383,7 +387,14 @@ export class App {
     void this.loadDiffFor(file)
   }
 
-  /** refresh re-reads the store and the whole change set. Bound to `r`. */
+  /**
+   * refresh re-reads the store and the whole change set.
+   *
+   * Deliberately does NOT clear `err`. Staging and external processes finish by
+   * refreshing, and clearing here wiped the very error they had just recorded —
+   * which is why failures used to vanish instead of reaching the banner. The
+   * explicit `r` binding clears it before calling this.
+   */
   async refresh(): Promise<void> {
     this.clearCaches()
     // Pick up edits the VSCode extension or an agent may have made to

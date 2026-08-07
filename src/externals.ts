@@ -1,17 +1,24 @@
 /**
- * Handing the terminal over to another program and taking it back.
+ * Handing the terminal to another program and taking it back.
  *
- * The Go original used bubbletea's ExecProcess, which tore down the TUI, ran the
- * child with inherited stdio and rebuilt the TUI afterwards. OpenTUI exposes the
- * same shape via suspend()/resume(): suspend drops raw mode, mouse tracking and
- * input handling so the child owns the terminal outright.
+ * There are three ways to do that, and which one you get depends on where refiner
+ * is running:
  *
- * Inside tmux we don't suspend at all — the child goes into a display-popup, a
- * separate pane that never touches ours, so the TUI can keep rendering behind it.
+ *   tmux    → `display-popup`: a bordered, titled window floating over the TUI,
+ *             which keeps rendering behind it.
+ *   zellij  → `run --floating`: the same idea under a different multiplexer.
+ *   neither → suspend the renderer and let the child own the whole terminal.
+ *
+ * Only the last one is full-screen, and that isn't a choice: without a multiplexer
+ * nothing can give a child process a sub-rectangle of the terminal. Doing it
+ * ourselves would mean running the editor under a PTY (`Bun.Terminal`) and writing
+ * a VT emulator to paint its output into a pane — plus a prefix key to decide who
+ * owns each keystroke, which is the problem tmux already solves.
  */
 
 import type { CliRenderer } from '@opentui/core'
 import type { App } from './app.ts'
+import { editorArgv, type PopupConfig } from './config.ts'
 
 /** True when running inside a tmux session. */
 export function inTmux(): boolean {
@@ -19,42 +26,87 @@ export function inTmux(): boolean {
   return t !== undefined && t !== ''
 }
 
-function centeredPopupArgs(widthPct: number, heightPct: number): string[] {
-  return ['display-popup', '-B', '-E', '-w', `${widthPct}%`, '-h', `${heightPct}%`]
+/** True when running inside a zellij session. */
+export function inZellij(): boolean {
+  const z = process.env['ZELLIJ']
+  return z !== undefined && z !== ''
 }
 
 /**
- * contentFramePopupArgs positions a popup precisely over the content pane's text
- * area, so `e` feels like editing in place.
+ * The top-left corner that centres a popup of the given size, as a percentage of
+ * the terminal.
  *
- * Rows from the top:    1..3 header (rounded border = 3 rows), 4 content pane
- *                       top border, 5 first content row.
- * Columns from the left: 1..treeW tree pane, treeW+1 content border-left,
- *                       treeW+2 content padding-left, treeW+3.. content text.
+ * Neither multiplexer centres a floating window for you once you ask for an
+ * explicit size: each places it at its own default origin and then clips whatever
+ * hangs off the screen. That reads as "stuck to the bottom-right AND smaller than I
+ * asked for" — two symptoms, one cause.
  */
-function contentFramePopupArgs(app: App): string[] {
-  const x = app.treePanelWidth() + 3
-  const y = 5
-  const w = Math.max(1, app.diffPanelWidth() - 4)
-  const h = Math.max(1, app.paneInnerHeight())
+function centreOffset(pct: number): number {
+  return Math.round((100 - pct) / 2)
+}
+
+/**
+ * A centred tmux popup, sized as a percentage of the terminal and framed like the
+ * app's own overlays. `-E` closes it when the command exits; `-b rounded` matches
+ * the rounded borders everywhere else (tmux 3.3+).
+ *
+ * `-x C -y C` is tmux's own "centre of the terminal". It's spelled out rather than
+ * left to the default because display-popup takes its position semantics from
+ * display-menu, where the default is pane-relative.
+ */
+export function tmuxPopupArgs(popup: PopupConfig, title: string): string[] {
   return [
     'display-popup',
-    '-B',
     '-E',
+    '-b',
+    'rounded',
+    '-T',
+    ` ${title} `,
     '-x',
-    String(x),
+    'C',
     '-y',
-    String(y),
+    'C',
     '-w',
-    String(w),
+    `${popup.widthPct}%`,
     '-h',
-    String(h),
+    `${popup.heightPct}%`,
   ]
 }
 
 /**
- * runExternal runs a child process with the terminal to itself, then refreshes
- * everything — the working tree may well have changed while it had control.
+ * zellij's equivalent: a floating pane that closes with the command.
+ *
+ * zellij has no "centre" keyword, so the origin is computed from the size. Left to
+ * itself it cascades new floating panes from its own default offset, which is how a
+ * 90% pane ends up hanging off the bottom-right and getting trimmed.
+ */
+export function zellijFloatingArgs(popup: PopupConfig, title: string): string[] {
+  return [
+    'run',
+    '--floating',
+    '--close-on-exit',
+    '--name',
+    title,
+    '--x',
+    `${centreOffset(popup.widthPct)}%`,
+    '--y',
+    `${centreOffset(popup.heightPct)}%`,
+    '--width',
+    `${popup.widthPct}%`,
+    '--height',
+    `${popup.heightPct}%`,
+    '--',
+  ]
+}
+
+/**
+ * runExternal runs a child process, then refreshes everything — the working tree
+ * may well have changed while it had control.
+ *
+ * `suspend` is false for the multiplexer paths: the child lands in its own pane, so
+ * our renderer keeps the terminal. That also means the child must NOT inherit our
+ * stdio — a tmux error message would otherwise be painted straight over the TUI —
+ * so its output is captured and surfaced in the error banner instead.
  */
 async function runExternal(
   app: App,
@@ -65,11 +117,24 @@ async function runExternal(
   if (suspend) renderer.suspend()
   try {
     const proc = Bun.spawn(cmd, {
-      stdin: 'inherit',
-      stdout: 'inherit',
-      stderr: 'inherit',
+      stdin: suspend ? 'inherit' : 'ignore',
+      stdout: suspend ? 'inherit' : 'pipe',
+      stderr: suspend ? 'inherit' : 'pipe',
     })
-    await proc.exited
+    if (suspend) {
+      await proc.exited
+      app.err = null
+    } else {
+      const [err, code] = await Promise.all([
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ])
+      if (code !== 0 && err.trim() !== '') {
+        app.err = new Error(`${cmd[0]}: ${err.trim()}`)
+      } else {
+        app.err = null
+      }
+    }
   } catch (err) {
     app.err = err as Error
   } finally {
@@ -79,25 +144,37 @@ async function runExternal(
   await app.refresh()
 }
 
-/** openEditor opens nvim on the selected file (`e`). */
+/**
+ * openEditor opens the configured editor on the selected file, at the line under
+ * the cursor (`e`). The editor and its line-argument style come from config.toml,
+ * falling back to $VISUAL / $EDITOR / nvim.
+ */
 export async function openEditor(app: App, renderer: CliRenderer): Promise<void> {
   if (app.selectedPath === '') return
+  const line = app.cursorLine()
+  const argv = editorArgv(app.editor, app.selectedPath, line)
+  const title = line > 0 ? `${app.selectedPath}:${line}` : app.selectedPath
+
   if (inTmux()) {
-    await runExternal(
-      app,
-      renderer,
-      ['tmux', ...contentFramePopupArgs(app), 'nvim', app.selectedPath],
-      false,
-    )
+    await runExternal(app, renderer, ['tmux', ...tmuxPopupArgs(app.popup, title), ...argv], false)
+  } else if (inZellij()) {
+    await runExternal(app, renderer, ['zellij', ...zellijFloatingArgs(app.popup, title), ...argv], false)
   } else {
-    await runExternal(app, renderer, ['nvim', app.selectedPath], true)
+    await runExternal(app, renderer, argv, true)
   }
 }
 
 /** openLazygit opens lazygit (`g`). */
 export async function openLazygit(app: App, renderer: CliRenderer): Promise<void> {
   if (inTmux()) {
-    await runExternal(app, renderer, ['tmux', ...centeredPopupArgs(90, 90), 'lazygit'], false)
+    await runExternal(app, renderer, ['tmux', ...tmuxPopupArgs(app.popup, 'lazygit'), 'lazygit'], false)
+  } else if (inZellij()) {
+    await runExternal(
+      app,
+      renderer,
+      ['zellij', ...zellijFloatingArgs(app.popup, 'lazygit'), 'lazygit'],
+      false,
+    )
   } else {
     await runExternal(app, renderer, ['lazygit'], true)
   }

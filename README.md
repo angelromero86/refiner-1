@@ -38,8 +38,8 @@ Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
   `Controllers/Task.ts`.
 - **Tema configurable** — paleta semántica + colores de sintaxis en
   `~/.config/refiner/config.toml`.
-- **Integración con tmux** — `e` abre nvim en el archivo, `g` abre lazygit, ambos en
-  `display-popup` cuando hay sesión tmux.
+- **Editor configurable** — `e` abre tu editor **en la línea del cursor**. En tmux o
+  zellij se abre en una ventana flotante con borde y título; `g` abre lazygit igual.
 - **Dos modos**:
   - `refiner` → cambios sin commitear (working tree + index)
   - `refiner <branch>` → review contra `<branch>...HEAD`
@@ -77,10 +77,13 @@ bun run src/index.ts     # o: bun start
 **Dependencias opcionales** (refiner funciona sin ellas, pero se integra si están):
 
 ```bash
-brew install tmux        # display-popup para nvim/lazygit
-brew install neovim      # tecla `e` abre el archivo
-brew install lazygit     # tecla `g` abre lazygit
+brew install tmux        # ventana flotante para el editor y lazygit
+brew install neovim      # editor por defecto si no configuras otro
+brew install lazygit     # tecla `g`
 ```
+
+Sin tmux ni zellij, `e` y `g` ocupan toda la pantalla mientras duran: sin
+multiplexor no hay forma de darle a otro proceso un trozo del terminal.
 
 ## Uso
 
@@ -104,7 +107,7 @@ refiner main           # diff de la rama actual contra main
 | `k` | Ayuda: todos los atajos (`?` también) |
 | `b` | Ocultar el árbol cuando el diff tiene el foco |
 | `[` `]` | Estrechar / ensanchar el árbol |
-| `e` | Abrir nvim en el archivo actual |
+| `e` | Abrir el editor en el archivo, en la línea del cursor |
 | `g` | Abrir lazygit |
 | `r` | Refrescar (re-lee `comments.json` y `git status`) |
 | `q` | Salir (pide confirmación; `⌃c` sale sin preguntar) |
@@ -123,9 +126,12 @@ ayuda; usa las flechas, `⌃u`/`⌃d`, `home`/`end` o `G`.
 
 ## Personalizar
 
-El tema por defecto es **Gruvbox Dark**. Vive en `~/.config/refiner/config.toml`
-(XDG); si no existe se usan los defaults, y los campos ausentes caen a default, así
-que puedes poner solo lo que quieras cambiar.
+La configuración vive en `~/.config/refiner/config.toml` (XDG). **Ese fichero no
+existe hasta que lo creas** — refiner nunca lo escribe, solo lo lee. Sin él usa los
+defaults (Gruvbox Dark, y `$VISUAL` / `$EDITOR` / `nvim` como editor), y los campos
+ausentes también caen a default, así que puedes poner solo lo que quieras cambiar.
+
+`refiner --help` te imprime la ruta exacta.
 
 ```toml
 # Paleta semántica (los nombres describen el ROL, no el color).
@@ -150,6 +156,21 @@ thread_label = "#fbf1c7"   # texto sobre el fondo del gutter
 
 cursor_bg  = "#3c3836"   # fila bajo el cursor
 background = "#282828"   # fondo de los modales (deben ser opacos)
+
+# Tamaño de la ventana flotante de `e` y `g`, en % del terminal (20..100).
+# Solo la respetan tmux y zellij.
+popup_width  = 90
+popup_height = 90
+
+# Editor que abre la tecla `e`. Por defecto: $VISUAL, luego $EDITOR, luego nvim.
+# Puede llevar argumentos: editor = "code -w"
+editor = "nvim"
+
+# Cómo le pasa refiner el número de línea. Se deduce del nombre del binario
+# (nvim/vim/emacs/nano → "plus"; druk/helix/subl/zed/code → "suffix"), así que
+# normalmente no hace falta ponerlo. Valores: "plus" (+42 fichero),
+# "suffix" (fichero:42) o "none".
+# editor_line = "suffix"
 
 # Apágalo para volver al add/del en verde/rojo plano, sin colores de token.
 syntax_highlight = true

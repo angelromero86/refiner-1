@@ -10,9 +10,11 @@ import { createCliRenderer } from '@opentui/core'
 import { App } from './app.ts'
 import { installKeyHandling } from './dispatch.ts'
 import { gitUserName, Mode, type Source } from './git.ts'
+import { loadConfig } from './config.ts'
+import { statePath } from './state.ts'
+import { configPath } from './theme.ts'
 import { applyTheme } from './styles.ts'
 import { configureAssetRoot } from './syntax.ts'
-import { loadTheme } from './theme.ts'
 import { View } from './view.ts'
 
 const USAGE = `refiner — git code-review TUI
@@ -21,7 +23,15 @@ usage:
   refiner              review uncommitted changes (working tree + index)
   refiner <branch>     review the current branch against <branch>...HEAD
 
-keys are listed in the footer; it changes with the focused pane.
+keys:
+  press k inside refiner for the full keymap
+
+config:
+  ${configPath()}
+  (optional — set your editor there, e.g. editor = "nvim")
+
+state:
+  ${statePath()}
 `
 
 async function main(): Promise<void> {
@@ -34,7 +44,7 @@ async function main(): Promise<void> {
   // Must run before anything reaches into OpenTUI's asset resolution.
   configureAssetRoot()
 
-  const { theme, warning } = await loadTheme()
+  const { theme, editor, popup, warning } = await loadConfig()
   if (warning) process.stderr.write(`warning: ${warning}\n`)
   applyTheme(theme)
 
@@ -45,6 +55,8 @@ async function main(): Promise<void> {
 
   const app = await App.create(source)
   app.author = (await gitUserName()) || guessUser()
+  app.editor = editor
+  app.popup = popup
 
   const renderer = await createCliRenderer({
     // The console overlay would swallow keys we bind; errors surface in the

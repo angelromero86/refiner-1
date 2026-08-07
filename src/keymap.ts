@@ -47,7 +47,7 @@ export const KEYMAP: readonly KeySection[] = [
       { keys: 'space', what: 'stage or unstage the line, or the whole selection' },
       { keys: 'enter', what: 'open the thread on this line, or start a new one' },
       { keys: 'tab', what: 'cycle the view: DIFF → SPLIT → NORMAL' },
-      { keys: 'e', what: 'open the file in nvim' },
+      { keys: 'e', what: 'open the file in your editor, at the line under the cursor' },
     ],
   },
   {
