@@ -26,6 +26,7 @@ import {
   type TextChunk,
 } from '@opentui/core'
 import { App, Focus, ModalMode, ViewMode, viewModeLabel } from './app.ts'
+import { KEYMAP } from './keymap.ts'
 import type { StoredThread } from './comments.ts'
 import { LineKind } from './diff.ts'
 import { refreshFinder } from './finder.ts'
@@ -69,7 +70,12 @@ export class View {
   private treeText!: TextRenderable
   private contentBox!: BoxRenderable
   private contentText!: TextRenderable
-  private footerText!: TextRenderable
+
+  private helpBox!: BoxRenderable
+  private helpText!: TextRenderable
+
+  private quitBox!: BoxRenderable
+  private quitText!: TextRenderable
 
   private modalBox!: BoxRenderable
   private modalText!: TextRenderable
@@ -163,16 +169,8 @@ export class View {
     middle.add(this.treeBox)
     middle.add(this.contentBox)
 
-    this.footerText = new TextRenderable(ctx, {
-      content: '',
-      height: 1,
-      flexShrink: 0,
-      wrapMode: 'none',
-    })
-
     root.add(headerBox)
     root.add(middle)
-    root.add(this.footerText)
 
     // ---- overlays -------------------------------------------------------
     this.modalBox = this.overlayBox()
@@ -204,6 +202,14 @@ export class View {
       focusedTextColor: S.palette.foreground,
     })
     this.finderText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.helpBox = this.overlayBox()
+    this.helpText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.helpBox.add(this.helpText)
+
+    this.quitBox = this.overlayBox()
+    this.quitText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.quitBox.add(this.quitText)
+
     this.finderBox.add(this.finderTitle)
     this.finderBox.add(this.finderInput)
     this.finderBox.add(this.finderText)
@@ -220,6 +226,8 @@ export class View {
     root.add(this.modalBox)
     root.add(this.listBox)
     root.add(this.finderBox)
+    root.add(this.helpBox)
+    root.add(this.quitBox)
   }
 
   private overlayBox(): BoxRenderable {
@@ -251,16 +259,17 @@ export class View {
 
     // The outdated check hits the filesystem, so it runs once when an overlay
     // that shows the flag opens — never per diff row, never per frame.
-    const overlayOpen = app.modal !== null || app.commentsList !== null
+    const overlayOpen = app.modal !== null || app.threadList !== null
     if (overlayOpen && !this.overlayWasOpen) this.refreshOutdated()
     this.overlayWasOpen = overlayOpen
 
     this.renderHeader()
     this.renderMiddle()
-    this.renderFooter()
     this.renderThreadModal()
-    this.renderCommentsList()
+    this.renderThreadList()
     this.renderFinder()
+    this.renderHelp()
+    this.renderQuitConfirm()
     this.syncWidgetFocus()
   }
 
@@ -273,13 +282,24 @@ export class View {
       chunk(' · ', S.dim),
       chunk(viewModeLabel(app.viewMode), { ...S.hotkey, bold: true }),
     ]
-    const right = `${app.files.length} files · ${app.stagedFileCount()} staged · ${app.threads.threads.length} comments`
+    // Counts threads, and now says so. This used to read "N comments" while
+    // counting threads — exactly the confusion this pass removes.
+    const n = app.store.threads.length
+    const counts = `${app.files.length} files · ${app.stagedFileCount()} staged · ${n} ${n === 1 ? 'thread' : 'threads'}`
+    // The keymap lives behind `k` now, so the header has to advertise it — it is
+    // the only thing on screen that tells you the app has more keys.
+    const right: TextChunk[] = [
+      chunk(counts, S.text),
+      chunk('  ', S.dim),
+      chunk('k', S.hotkey),
+      chunk(' keys', S.dim),
+    ]
 
     // The border sits outside the box width; the padding is inside it.
     const contentW = Math.max(1, app.width - 4)
-    const gap = Math.max(1, contentW - chunksWidth(left) - textWidth(right))
+    const gap = Math.max(1, contentW - chunksWidth(left) - chunksWidth(right))
     this.headerText.content = new StyledText(
-      clampRow([...left, chunk(' '.repeat(gap)), chunk(right, S.text)], contentW),
+      clampRow([...left, chunk(' '.repeat(gap)), ...right], contentW),
     )
   }
 
@@ -292,6 +312,11 @@ export class View {
       const treeW = app.treePanelWidth()
       this.treeBox.width = treeW
       this.treeBox.borderColor = app.focus === Focus.Tree ? S.palette.focus : S.palette.muted
+      // Position readouts ride the bottom border, where they cost no rows. This
+      // is what the removed footer used to show on its right-hand side.
+      this.treeBox.bottomTitle =
+        app.flat.length > 0 ? ` ${app.cursor + 1}/${app.flat.length} ` : undefined
+      this.treeBox.bottomTitleAlignment = 'right'
       this.treeText.content = this.buildTree(Math.max(1, treeW - 4), innerH)
     }
 
@@ -301,65 +326,11 @@ export class View {
     // `title` does exactly that natively.
     this.contentBox.title = app.selectedPath === '' ? undefined : ` ${app.selectedPath} `
     this.contentBox.titleColor = contentFocused ? S.palette.focus : S.palette.muted
+    this.contentBox.bottomTitle =
+      app.selectedPath === '' ? undefined : ` ${app.contentLineLabel()} `
+    this.contentBox.bottomTitleAlignment = 'right'
 
     this.contentText.content = this.buildContent(Math.max(1, app.diffPanelWidth() - 4), innerH)
-  }
-
-  private renderFooter(): void {
-    const app = this.app
-    // `tab` cycles DIFF → SPLIT → NORMAL → DIFF; show the NEXT one so the hint
-    // reads as "press tab to go to X".
-    const nextMode =
-      app.viewMode === ViewMode.Split
-        ? 'NORMAL'
-        : app.viewMode === ViewMode.Current
-          ? 'DIFF'
-          : 'SPLIT'
-
-    const hints: [string, string][] =
-      app.focus === Focus.Tree
-        ? [
-            ['↑↓', ' navigate'],
-            ['→', ' content'],
-            ['enter', ' open/select'],
-            ['space', ' stage'],
-            ['p', ' find'],
-            ['c', ' comments'],
-            ['[ ]', ' resize'],
-            ['g', ' lazygit'],
-            ['r', ' refresh'],
-            ['q', ' quit'],
-          ]
-        : [
-            ['↑↓', ' scroll'],
-            ['⇧↑↓', ' select'],
-            ['space', ' stage'],
-            ['enter', ' comment'],
-            ['p', ' find'],
-            ['c', ' threads'],
-            ['←', ' tree'],
-            ['tab', ` ${nextMode}`],
-            ['b', ' hide tree'],
-            ['e', ' edit'],
-            ['q', ' quit'],
-          ]
-
-    const left: TextChunk[] = []
-    hints.forEach(([keyLabel, desc], i) => {
-      if (i > 0) left.push(chunk(' · ', S.dim))
-      left.push(chunk(keyLabel, S.hotkey))
-      left.push(chunk(desc, S.dim))
-    })
-
-    let right =
-      app.focus === Focus.Tree ? `${app.cursor + 1}/${app.flat.length}` : app.contentLineLabel()
-    if (app.selectedPath !== '') right += ' · ' + basename(app.selectedPath)
-
-    const contentW = Math.max(1, app.width - 2)
-    const gap = Math.max(1, contentW - chunksWidth(left) - textWidth(right))
-    this.footerText.content = new StyledText(
-      clampRow([chunk(' '), ...left, chunk(' '.repeat(gap)), chunk(right, S.dim)], app.width),
-    )
   }
 
   // -------------------------------------------------------------------- tree
@@ -433,7 +404,7 @@ export class View {
         ],
         w,
         { bg },
-        hasThreads ? chunk('●', { bg, fg: S.palette.commentBg }) : null,
+        hasThreads ? chunk('●', { bg, fg: S.palette.threadBg }) : null,
       )
     }
 
@@ -484,7 +455,7 @@ export class View {
                 isCursor: i === app.contentCursor,
                 isSelected: i >= selStart && i <= selEnd,
                 focused,
-                hasComment: app.lineHasComment(app.selectedPath, row.newNum),
+                hasComment: app.lineHasThread(app.selectedPath, row.newNum),
                 oldStaged: row.oldSrcIdx >= 0 && stagedSet.has(row.oldSrcIdx),
                 newStaged: row.newSrcIdx >= 0 && stagedSet.has(row.newSrcIdx),
               } satisfies RowState,
@@ -508,7 +479,7 @@ export class View {
                 isCursor: i === app.contentCursor,
                 isSelected: i >= selStart && i <= selEnd,
                 focused,
-                hasComment: app.lineHasComment(app.selectedPath, line.newNum),
+                hasComment: app.lineHasThread(app.selectedPath, line.newNum),
                 staged: stagedSet.has(cached.currentIdx[i]),
               } satisfies RowState,
               contentW,
@@ -529,7 +500,7 @@ export class View {
                 isCursor: i === app.contentCursor,
                 isSelected: i >= selStart && i <= selEnd,
                 focused,
-                hasComment: app.lineHasComment(app.selectedPath, line.newNum),
+                hasComment: app.lineHasThread(app.selectedPath, line.newNum),
                 staged: stagedSet.has(i),
               } satisfies RowState,
               contentW,
@@ -584,7 +555,7 @@ export class View {
     for (let i = 0; i < total; i++) {
       const l = lines[i]
       const row = Math.min(h - 1, Math.floor((i * h) / total))
-      if (app.lineHasComment(app.selectedPath, l.newNum)) marks[row].comment = true
+      if (app.lineHasThread(app.selectedPath, l.newNum)) marks[row].comment = true
       if (stagedSet.has(i)) {
         marks[row].staged = true
         continue
@@ -609,7 +580,7 @@ export class View {
       const mk = marks[r]
       const inVp = r >= vpStart && r < vpEnd
       const kindBg = mk.comment
-        ? S.palette.commentBg
+        ? S.palette.threadBg
         : mk.staged
           ? S.palette.stagedFg
           : mk.del
@@ -633,14 +604,14 @@ export class View {
    * and re-renders once the answers land.
    */
   private refreshOutdated(): void {
-    const threads = this.app.threads.threads.slice()
+    const threads = this.app.store.threads.slice()
     void Promise.all(
       threads.map(async (t) => [t.id, await this.app.isThreadOutdated(t)] as const),
     ).then((results) => {
       this.outdated = new Set(results.filter(([, stale]) => stale).map(([id]) => id))
       // Only re-render if an overlay is still open; overlayWasOpen is already
       // true by now, so this cannot loop.
-      if (this.app.modal || this.app.commentsList) this.render()
+      if (this.app.modal || this.app.threadList) this.render()
     })
   }
 
@@ -663,13 +634,16 @@ export class View {
     const rows: TextChunk[][] = []
 
     if (modal.threadIdx >= 0) {
-      const t = app.threads.threads[modal.threadIdx]
+      const t = app.store.threads[modal.threadIdx]
       if (!t) {
         this.modalBox.visible = false
         return
       }
       rows.push([chunk(`Thread · ${t.file}:${t.range.start}-${t.range.end}`, S.appName)])
-      const meta: TextChunk[] = [chunk(`status: ${t.status} · id: ${t.id}`, S.dim)]
+      const c = t.comments.length
+      const meta: TextChunk[] = [
+        chunk(`status: ${t.status} · ${c} ${c === 1 ? 'comment' : 'comments'} · id: ${t.id}`, S.dim),
+      ]
       if (this.outdated.has(t.id)) meta.push(chunk(' · OUTDATED', S.del))
       rows.push(meta)
       rows.push([])
@@ -738,11 +712,11 @@ export class View {
     const app = this.app
     const hint: TextChunk[] = [
       chunk('↑↓', S.hotkey),
-      chunk(' message · ', S.dim),
+      chunk(' comment · ', S.dim),
       chunk('⌃u/⌃d', S.hotkey),
       chunk(' scroll · ', S.dim),
     ]
-    const t = threadIdx >= 0 ? app.threads.threads[threadIdx] : null
+    const t = threadIdx >= 0 ? app.store.threads[threadIdx] : null
     if (t && app.findFile(t.file) !== null) {
       hint.push(chunk('g', S.hotkey), chunk(' goto · ', S.dim))
     }
@@ -752,7 +726,7 @@ export class View {
       chunk('e', S.hotkey),
       chunk(' edit · ', S.dim),
       chunk('d/D', S.hotkey),
-      chunk(' del · ', S.dim),
+      chunk(' del comment/thread · ', S.dim),
       chunk('esc', S.hotkey),
       chunk(' close', S.dim),
     )
@@ -773,12 +747,12 @@ export class View {
     const lines: TextChunk[][] = []
     let selectedStartRow = 0
     if (!modal || modal.threadIdx < 0) return { lines, selectedStartRow }
-    const t = app.threads.threads[modal.threadIdx]
+    const t = app.store.threads[modal.threadIdx]
     if (!t) return { lines, selectedStartRow }
 
     const wrapW = Math.max(1, innerW - 4) // accounts for the 4-space body indent
     t.comments.forEach((msg, i) => {
-      const selected = modal.mode === ModalMode.Browse && i === modal.selectedMsg
+      const selected = modal.mode === ModalMode.Browse && i === modal.selectedComment
       if (selected) selectedStartRow = lines.length
       lines.push([
         selected ? chunk('▶ ', S.hotkey) : chunk('  '),
@@ -794,33 +768,141 @@ export class View {
     return { lines, selectedStartRow }
   }
 
-  private renderCommentsList(): void {
+  /**
+   * renderQuitConfirm draws the "really quit?" box. Small and centered, with the
+   * default action spelled out rather than implied by a highlighted button —
+   * there is no pointer here, so the keys are the interface.
+   */
+  private renderQuitConfirm(): void {
     const app = this.app
-    if (!app.commentsList) {
+    if (!app.quitConfirm) {
+      this.quitBox.visible = false
+      return
+    }
+
+    const rows: TextChunk[][] = [
+      [chunk('Quit refiner?', S.appName)],
+      [],
+      [
+        chunk('y', S.hotkey),
+        chunk(' or ', S.dim),
+        chunk('enter', S.hotkey),
+        chunk('  quit', S.text),
+      ],
+      [
+        chunk('n', S.hotkey),
+        chunk(' or ', S.dim),
+        chunk('esc', S.hotkey),
+        chunk('    stay', S.text),
+      ],
+    ]
+
+    const innerW = Math.max(...rows.map(chunksWidth))
+    const outerW = Math.min(app.width, innerW + 6)
+    const totalH = Math.min(app.height, rows.length + OVERLAY_CHROME_H)
+
+    this.quitText.content = rowsToStyledText(rows)
+    this.quitBox.width = outerW
+    this.quitBox.height = totalH
+    this.quitBox.left = Math.max(0, Math.floor((app.width - outerW) / 2))
+    this.quitBox.top = Math.max(0, Math.floor((app.height - totalH) / 2))
+    this.quitBox.visible = true
+  }
+
+  /**
+   * renderHelp draws the keymap overlay. It is built from src/keymap.ts rather
+   * than from a list kept here, so what it shows and what dispatch.ts binds can be
+   * compared side by side instead of drifting.
+   */
+  private renderHelp(): void {
+    const app = this.app
+    const help = app.help
+    if (!help) {
+      this.helpBox.visible = false
+      return
+    }
+
+    const outerW = Math.min(88, Math.max(46, app.width - 8))
+    const innerW = outerW - 6
+    // Two rows of chrome for the title and the footer hint, on top of the border.
+    const bodyH = Math.max(4, Math.min(app.height - OVERLAY_CHROME_H - 3, 32))
+
+    // One key column wide enough for every binding, so the descriptions line up.
+    const keyW = Math.max(...KEYMAP.flatMap((sec) => sec.bindings.map((b) => textWidth(b.keys))))
+    const descW = Math.max(1, innerW - keyW - 2)
+
+    const lines: TextChunk[][] = []
+    KEYMAP.forEach((section, i) => {
+      if (i > 0) lines.push([])
+      lines.push([chunk(section.title, { ...S.appName, fg: S.palette.accent })])
+      for (const b of section.bindings) {
+        lines.push([
+          chunk(b.keys.padStart(keyW), S.hotkey),
+          chunk('  '),
+          chunk(truncate(b.what, descW), S.text),
+        ])
+      }
+    })
+
+    const maxScroll = Math.max(0, lines.length - bodyH)
+    if (help.scrollY > maxScroll) help.scrollY = maxScroll
+    if (help.scrollY < 0) help.scrollY = 0
+    help.bodyHeight = bodyH
+
+    const end = Math.min(lines.length, help.scrollY + bodyH)
+    const body: TextChunk[][] = []
+    for (let i = help.scrollY; i < end; i++) body.push(lines[i])
+    while (body.length < bodyH) body.push([])
+
+    if (help.scrollY > 0) body[0] = [chunk(`▲ ${help.scrollY} more above`, S.dim)]
+    if (end < lines.length) {
+      body[body.length - 1] = [chunk(`▼ ${lines.length - end} more below`, S.dim)]
+    }
+
+    const rows: TextChunk[][] = [[chunk('Keys', S.appName)], [], ...body, []]
+    const hint: TextChunk[] = []
+    if (maxScroll > 0) {
+      hint.push(chunk('↑↓', S.hotkey), chunk(' scroll · ', S.dim))
+    }
+    hint.push(chunk('esc', S.hotkey), chunk(' or ', S.dim), chunk('k', S.hotkey), chunk(' close', S.dim))
+    rows.push(hint)
+
+    this.helpText.content = rowsToStyledText(rows)
+    const totalH = Math.min(app.height, rows.length + OVERLAY_CHROME_H)
+    this.helpBox.width = outerW
+    this.helpBox.height = totalH
+    this.helpBox.left = Math.max(0, Math.floor((app.width - outerW) / 2))
+    this.helpBox.top = Math.max(0, Math.floor((app.height - totalH) / 2))
+    this.helpBox.visible = true
+  }
+
+  private renderThreadList(): void {
+    const app = this.app
+    if (!app.threadList) {
       this.listBox.visible = false
       return
     }
-    const threads = app.threads.threads
+    const threads = app.store.threads
     const contentW = Math.min(100, Math.max(40, Math.floor((app.width * 2) / 3)))
     const contentH = Math.min(20, Math.max(5, app.height - 8))
     const rowW = Math.max(1, contentW - 4)
 
     const rows: TextChunk[][] = []
-    rows.push([chunk(`Comments (${threads.length})`, S.appName)])
+    rows.push([chunk(`Threads (${threads.length})`, S.appName)])
     rows.push([])
 
     if (threads.length === 0) {
       rows.push([chunk('No threads yet. Select lines in the content and press enter.', S.dim)])
     } else {
       // Visible window centered on the cursor.
-      let start = Math.max(0, app.commentsList.cursor - Math.floor(contentH / 2))
+      let start = Math.max(0, app.threadList.cursor - Math.floor(contentH / 2))
       let end = start + contentH
       if (end > threads.length) {
         end = threads.length
         start = Math.max(0, end - contentH)
       }
       for (let i = start; i < end; i++) {
-        rows.push(this.buildCommentsListRow(threads[i], i === app.commentsList.cursor, rowW))
+        rows.push(this.buildThreadListRow(threads[i], i === app.threadList.cursor, rowW))
       }
     }
     rows.push([])
@@ -843,35 +925,34 @@ export class View {
     this.listBox.visible = true
   }
 
-  private buildCommentsListRow(t: StoredThread, isCursor: boolean, w: number): TextChunk[] {
+  /**
+   * One row per THREAD. The author and snippet come from its first comment, and a
+   * `+N` tail says how many more are inside — without it the row reads as though a
+   * thread were a single comment, which is the whole confusion to avoid.
+   */
+  private buildThreadListRow(t: StoredThread, isCursor: boolean, w: number): TextChunk[] {
     const loc = `${t.file}:${t.range.start}-${t.range.end}`
     const first = t.comments[0]
     const author = first ? '@' + first.author : ''
     const snippet = first ? first.body.split('\n')[0] : ''
+    const replies = Math.max(0, t.comments.length - 1)
     const stale = this.outdated.has(t.id)
 
     if (isCursor) {
       const bg = S.palette.cursorBg
       const row: TextChunk[] = [chunk('▶ ', { bg, fg: S.palette.accent, bold: true })]
       if (stale) row.push(chunk('[outdated] ', { bg, fg: S.palette.delFg }))
-      row.push(
-        chunk(loc + '  ', { bg }),
-        chunk(author, withBg(S.mode, bg)),
-        chunk('  ', { bg }),
-        chunk(snippet, withBg(S.text, bg)),
-      )
+      row.push(chunk(loc + '  ', { bg }), chunk(author, withBg(S.mode, bg)))
+      if (replies > 0) row.push(chunk(` +${replies}`, withBg(S.hotkey, bg)))
+      row.push(chunk('  ', { bg }), chunk(snippet, withBg(S.text, bg)))
       return fitOverlayRow(row, w, { bg })
     }
 
     const row: TextChunk[] = [chunk('  ')]
     if (stale) row.push(chunk('[outdated] ', S.del))
-    row.push(
-      chunk(loc, S.dir),
-      chunk('  '),
-      chunk(author, S.mode),
-      chunk('  '),
-      chunk(snippet, S.text),
-    )
+    row.push(chunk(loc, S.dir), chunk('  '), chunk(author, S.mode))
+    if (replies > 0) row.push(chunk(` +${replies}`, S.hotkey))
+    row.push(chunk('  '), chunk(snippet, S.text))
     return clampRow(row, w)
   }
 
@@ -959,7 +1040,7 @@ export class View {
         ],
         w,
         { bg },
-        hasThreads ? chunk('●', { bg, fg: S.palette.commentBg }) : null,
+        hasThreads ? chunk('●', { bg, fg: S.palette.threadBg }) : null,
       )
     }
 
@@ -1036,11 +1117,6 @@ function rightAlignMarker(
     }
   }
   return clampRow(row, w)
-}
-
-function basename(p: string): string {
-  const i = p.lastIndexOf('/')
-  return i >= 0 ? p.slice(i + 1) : p
 }
 
 /** ISO timestamp → "YYYY-MM-DD HH:mm" in local time. */

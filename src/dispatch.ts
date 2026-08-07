@@ -19,7 +19,7 @@ import { openEditor, openLazygit } from './externals.ts'
 import { toggleFullStage, toggleStaged } from './staging.ts'
 import { handleFinderKey, openFinder } from './finder.ts'
 import {
-  handleCommentsListKey,
+  handleThreadListKey,
   handleModalKey,
   openOrCreateThread,
 } from './threads-ui.ts'
@@ -52,9 +52,12 @@ function shutdown(renderer: CliRenderer): void {
 
 /** route returns true when refiner claimed the key. */
 function route(app: App, renderer: CliRenderer, key: string): boolean {
-  // Modals get first refusal, in the same order the Go Update did.
+  // Overlays get first refusal, outermost first, so their keys never leak into
+  // whatever is behind them.
+  if (app.quitConfirm) return handleQuitConfirmKey(app, renderer, key)
+  if (app.help) return handleHelpKey(app, key)
   if (app.modal) return handleModalKey(app, key)
-  if (app.commentsList) return handleCommentsListKey(app, key)
+  if (app.threadList) return handleThreadListKey(app, key)
   if (app.finder) return handleFinderKey(app, key)
   if (handleGlobalKey(app, renderer, key)) return true
   return app.focus === Focus.Tree
@@ -70,7 +73,9 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
   switch (key) {
     case 'q':
     case 'esc':
-      shutdown(renderer)
+      // Both are one keystroke away from anything else you might be doing, so
+      // they ask first. ⌃c stays immediate as the deliberate escape hatch.
+      app.quitConfirm = true
       return true
     case 'r':
       void app.refresh()
@@ -80,10 +85,16 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
       return true
     case 'c':
       // Reachable only when no other modal is open — route() checks those first.
-      app.commentsList = { cursor: 0 }
+      app.threadList = { cursor: 0 }
       return true
     case 'p':
       openFinder(app)
+      return true
+    case 'k':
+    case '?':
+      // The keymap used to live in a permanent footer. Moving it here gives the
+      // diff that row back; the header advertises the key so it stays findable.
+      app.help = { scrollY: 0, bodyHeight: 0 }
       return true
     case 'b':
       // Toggle tree auto-hide: when on, the tree pane hides while content has
@@ -110,17 +121,74 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
   }
 }
 
+/**
+ * handleQuitConfirmKey drives the quit confirmation. Nothing is lost by quitting
+ * — threads are written on every edit and staging lives in git — so this guards
+ * against the fat-finger, not against data loss.
+ */
+function handleQuitConfirmKey(app: App, renderer: CliRenderer, key: string): boolean {
+  switch (key) {
+    case 'y':
+    case 'enter':
+      shutdown(renderer)
+      return true
+    case 'n':
+    case 'esc':
+    case 'q':
+      app.quitConfirm = false
+      return true
+    default:
+      // Modal: swallow everything so a stray key can't act on the view behind.
+      return true
+  }
+}
+
+/**
+ * handleHelpKey drives the keymap overlay. Scrollable because the full list
+ * outgrows a short terminal, and dismissible with the same key that opened it.
+ */
+function handleHelpKey(app: App, key: string): boolean {
+  const help = app.help
+  if (!help) return false
+  switch (key) {
+    case 'esc':
+    case 'k':
+    case '?':
+    case 'q':
+      app.help = null
+      return true
+    case 'up':
+      help.scrollY = Math.max(0, help.scrollY - 1)
+      return true
+    case 'down':
+      help.scrollY++
+      return true
+    case 'pgup':
+    case 'ctrl+u':
+      help.scrollY = Math.max(0, help.scrollY - Math.max(1, help.bodyHeight - 1))
+      return true
+    case 'pgdown':
+    case 'ctrl+d':
+      help.scrollY += Math.max(1, help.bodyHeight - 1)
+      return true
+    case 'home':
+      help.scrollY = 0
+      return true
+    default:
+      // Swallow everything else: the overlay is modal.
+      return true
+  }
+}
+
 function handleTreeKey(app: App, key: string): boolean {
   if (app.flat.length === 0) return false
   switch (key) {
     case 'up':
-    case 'k':
       // Wraps around, matching the original.
       app.cursor = (app.cursor - 1 + app.flat.length) % app.flat.length
       selectFileAtCursor(app)
       return true
     case 'down':
-    case 'j':
       app.cursor = (app.cursor + 1) % app.flat.length
       selectFileAtCursor(app)
       return true
@@ -198,12 +266,10 @@ function handleContentKey(app: App, renderer: CliRenderer, key: string): boolean
       if (app.contentCursor < n - 1) app.contentCursor++
       break
     case 'up':
-    case 'k':
       if (app.contentCursor > 0) app.contentCursor--
       app.selectionAnchor = -1
       break
     case 'down':
-    case 'j':
       if (app.contentCursor < n - 1) app.contentCursor++
       app.selectionAnchor = -1
       break

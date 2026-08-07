@@ -77,6 +77,35 @@ spawn the parser worker from Bun's virtual filesystem, which is why `bun run bui
 emits `dist/refiner-assets/` — ship it alongside the binary or highlighting silently
 switches off (by design: `highlightDiff` never throws).
 
+## Vocabulary
+
+A **thread** is anchored to `(file, line range)`, carries `status`, and contains one
+or more **comments**. Keep these words apart in identifiers and in anything the user
+reads — an earlier pass had the header counting threads while labelling them
+"comments", and the thread modal calling comments "messages".
+
+Rules: `store.threads` is the list of threads (the field is `app.store`, never
+`app.threads`, so `store.threads` reads correctly). `lineHasThread` asks about
+anchors; the `thread`/`thread_label` theme colors paint the "a thread is anchored
+here" cue. The word "message" is not used anywhere.
+
+## Keymap
+
+`src/keymap.ts` is the single source of truth for the `k` overlay. There is no
+footer: it cost a permanent row to repeat the same hints, so the keys moved behind
+`k` (aliased `?`) and the header advertises it. Pane position readouts live in the
+panes' `bottomTitle`, which costs no rows.
+
+If you add a binding in `dispatch.ts`, add it to `keymap.ts` too — nothing else
+surfaces it, so an unlisted key is an undiscoverable key.
+
+`j`/`k` are deliberately not navigation aliases any more; `k` is the help key.
+
+`q` and `esc` open a quit confirmation rather than exiting outright; `⌃c` still
+exits immediately from anywhere, which is the deliberate escape hatch. Nothing is
+lost on quit — threads are written on every edit, staging lives in git — so the
+confirmation guards against the fat-finger, not against data loss.
+
 ## Layout
 
 `src/app.ts` holds all state and the geometry helpers; `src/view.ts` draws and owns

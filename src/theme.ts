@@ -21,9 +21,9 @@ export interface Theme {
   primary: string
 
   /**
-   * Accent — secondary highlight. Footer key labels, modified status badge (M),
-   * directory names in the tree, `▶` marker on the selected message in modals,
-   * and the "this thing has comments" cue (`●` in the tree, scrollbar band).
+   * Accent — secondary highlight. Key labels in the header and overlays, modified
+   * status badge (M), directory names in the tree, `▶` marker on the selected row,
+   * and the "a thread is anchored here" cue (`●` in the tree, minimap band).
    */
   accent: string
 
@@ -54,17 +54,17 @@ export interface Theme {
   stagedFg: string
 
   /**
-   * Comment — "this thing has reviewer comments". Drives the gutter background
-   * on commented lines, the `●` tree marker, and the scrollbar comment band.
-   * Used as both foreground and background — pick something vivid either way.
+   * Thread — "a review thread is anchored here". Drives the gutter background on
+   * those lines, the `●` tree marker and the minimap band. Used as both
+   * foreground and background — pick something vivid either way.
    */
-  comment: string
+  thread: string
 
   /**
-   * CommentLabel — text color for line numbers drawn on top of the comment
-   * background. Pick strong contrast against `comment`.
+   * ThreadLabel — text color for line numbers drawn on top of the thread
+   * background. Pick strong contrast against `thread`.
    */
-  commentLabel: string
+  threadLabel: string
 
   /** CursorBg — background of the row under the cursor. */
   cursorBg: string
@@ -89,7 +89,7 @@ export interface Theme {
    *
    * The panes themselves stay transparent and show the terminal through, exactly
    * as before. Overlays can't: they float above the diff, so without an opaque
-   * fill the code underneath bleeds through the comment text. The default is the
+   * fill the code underneath bleeds through the overlay's text. The default is the
    * terminal background the rest of this palette was tuned against, so a modal
    * looks like it sits on the terminal rather than on the diff. Set it lighter
    * for a raised, "floating card" look.
@@ -116,8 +116,8 @@ export function defaultTheme(): Theme {
     stagedBg: '#23303d',
     stagedFg: '#83a598', // bright blue
 
-    comment: '#4c2b3d',
-    commentLabel: '#fbf1c7', // fg0
+    thread: '#4c2b3d',
+    threadLabel: '#fbf1c7', // fg0
 
     cursorBg: '#3c3836', // bg1 — the classic gruvbox cursorline
     background: '#282828', // bg0
@@ -200,8 +200,8 @@ const KEY_MAP: Record<string, ColorKey> = {
   del_fg: 'delFg',
   staged_bg: 'stagedBg',
   staged_fg: 'stagedFg',
-  comment: 'comment',
-  comment_label: 'commentLabel',
+  thread: 'thread',
+  thread_label: 'threadLabel',
   cursor_bg: 'cursorBg',
   background: 'background',
 }

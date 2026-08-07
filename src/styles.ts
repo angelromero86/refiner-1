@@ -66,8 +66,8 @@ export interface Palette {
   delFg: RGBA
   stagedBg: RGBA
   stagedFg: RGBA
-  commentBg: RGBA
-  commentLabel: RGBA
+  threadBg: RGBA
+  threadLabel: RGBA
   cursorBg: RGBA
   background: RGBA
 }
@@ -100,7 +100,7 @@ export interface Styles {
    * only — the content area keeps its own styling — so the comment cue stays
    * visible even when the row is highlighted or selected.
    */
-  commentGutter: Style
+  threadGutter: Style
 
   statusM: Style
   statusA: Style
@@ -191,8 +191,8 @@ function buildStyles(t: Theme): Styles {
   const delFg = RGBA.fromHex(t.delFg)
   const stagedBg = RGBA.fromHex(t.stagedBg)
   const stagedFg = RGBA.fromHex(t.stagedFg)
-  const commentBg = RGBA.fromHex(t.comment)
-  const commentLabel = RGBA.fromHex(t.commentLabel)
+  const threadBg = RGBA.fromHex(t.thread)
+  const threadLabel = RGBA.fromHex(t.threadLabel)
   const cursorBg = RGBA.fromHex(t.cursorBg)
   const background = RGBA.fromHex(t.background)
 
@@ -219,8 +219,8 @@ function buildStyles(t: Theme): Styles {
       delFg,
       stagedBg,
       stagedFg,
-      commentBg,
-      commentLabel,
+      threadBg,
+      threadLabel,
       cursorBg,
       background,
     },
@@ -250,7 +250,7 @@ function buildStyles(t: Theme): Styles {
     stagedGutter: { bg: stagedBg, fg: stagedFg },
     stagedContent: { bg: stagedBg, fg: stagedFg },
     stagedPad: { bg: stagedBg },
-    commentGutter: { bg: commentBg, fg: commentLabel },
+    threadGutter: { bg: threadBg, fg: threadLabel },
 
     // A/D reuse the diff hunk fgs so a freshly-added file in the tree matches
     // its `+` lines in the diff. `?` reuses primary — "this is a brand-new
@@ -266,7 +266,7 @@ function buildStyles(t: Theme): Styles {
     dir: { fg: accent, bold: true },
     dirStaged: { fg: stagedFg, bold: true },
     fileStaged: { fg: stagedFg },
-    marker: { fg: commentBg },
+    marker: { fg: threadBg },
     // Guide lines (│ ├ └) use the soft cursor color so they read as tree
     // structure without competing with file names.
     treeGuide: { fg: cursorBg },

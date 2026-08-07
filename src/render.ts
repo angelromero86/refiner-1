@@ -192,7 +192,7 @@ export function renderUnifiedRow(
     // The comment indicator (pink gutter) overrides the cursor bg on the gutter
     // only — the content keeps its cursor styling, so a commented line that is
     // also the cursor still reads as the cursor.
-    const gutterStyle = st.hasComment ? S.commentGutter : cs.gutter
+    const gutterStyle = st.hasComment ? S.threadGutter : cs.gutter
     return fitRow(
       [
         chunk(st.isCursor ? '▶ ' : '  ', cs.marker),
@@ -226,7 +226,7 @@ export function renderUnifiedRow(
     contentStyle = S.text
     padStyle = undefined
   }
-  if (st.hasComment) gutterStyle = S.commentGutter
+  if (st.hasComment) gutterStyle = S.threadGutter
 
   return fitRow(
     [chunk('  '), chunk(gutter, gutterStyle), ...contentChunks(text, contentStyle, runs)],
@@ -263,7 +263,7 @@ export function renderCurrentRow(
 
   if (st.isSelected && st.focused) {
     const cs = cursorStylesForLine(l.kind, staged)
-    const gutterStyle = st.hasComment ? S.commentGutter : cs.gutter
+    const gutterStyle = st.hasComment ? S.threadGutter : cs.gutter
     return fitRow(
       [
         chunk(st.isCursor ? '▶ ' : '  ', cs.marker),
@@ -292,7 +292,7 @@ export function renderCurrentRow(
     contentStyle = S.text
     padStyle = undefined
   }
-  if (st.hasComment) gutterStyle = S.commentGutter
+  if (st.hasComment) gutterStyle = S.threadGutter
 
   return fitRow(
     [chunk('  '), chunk(gutter, gutterStyle), ...contentChunks(text, contentStyle, runs)],
@@ -327,11 +327,11 @@ export function renderSplitRow(
     let oldContentStyle = csOld.content
     let newContentStyle = csNew.content
     if (st.hasComment) {
-      oldGutterStyle = S.commentGutter
-      newGutterStyle = S.commentGutter
+      oldGutterStyle = S.threadGutter
+      newGutterStyle = S.threadGutter
       // Keep the pink continuous across an empty side.
-      if (r.kind === RowKind.Add) oldContentStyle = S.commentGutter
-      if (r.kind === RowKind.Del) newContentStyle = S.commentGutter
+      if (r.kind === RowKind.Add) oldContentStyle = S.threadGutter
+      if (r.kind === RowKind.Del) newContentStyle = S.threadGutter
     }
     return fitRow(
       [
@@ -376,7 +376,7 @@ function renderSplitSide(
   if (staged && (delSide || addSide)) gutterStyle = S.stagedGutter
   else if (delSide) gutterStyle = S.delGutter
   else if (addSide) gutterStyle = S.addGutter
-  if (hasComment) gutterStyle = S.commentGutter
+  if (hasComment) gutterStyle = S.threadGutter
 
   // On a commented row, paint an empty side's content pink too so the marker
   // reads as one continuous block from gutter to divider.
@@ -384,7 +384,7 @@ function renderSplitSide(
   if (staged && (delSide || addSide)) contentStyle = S.stagedContent
   else if (delSide) contentStyle = S.delContent
   else if (addSide) contentStyle = S.addContent
-  else if (hasComment && emptySide) contentStyle = S.commentGutter
+  else if (hasComment && emptySide) contentStyle = S.threadGutter
   else contentStyle = S.text
 
   return [

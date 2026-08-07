@@ -27,7 +27,7 @@ export function newThreadModal(
     newThreadFile: file,
     newThreadStart: start,
     newThreadEnd: end,
-    selectedMsg: 0,
+    selectedComment: 0,
     mode: threadIdx < 0 ? ModalMode.Compose : ModalMode.Browse,
     editIdx: -1,
     scrollY: 0,
@@ -59,9 +59,9 @@ export function openOrCreateThread(app: App): void {
 
   const cursorLine = app.cursorLine()
   if (cursorLine > 0) {
-    const existing = app.threads.threadAt(app.selectedPath, cursorLine)
+    const existing = app.store.threadAt(app.selectedPath, cursorLine)
     if (existing) {
-      const idx = app.threads.threads.findIndex((t) => t.id === existing.id)
+      const idx = app.store.threads.findIndex((t) => t.id === existing.id)
       if (idx >= 0) {
         openModal(app, newThreadModal(idx, '', 0, 0))
         return
@@ -116,34 +116,32 @@ export function jumpToThread(app: App, t: StoredThread): void {
   app.ensureDiffLoaded(file)
 }
 
-// ------------------------------------------------------------ comments list
+// -------------------------------------------------------------- thread list
 
-/** handleCommentsListKey returns true when the key was consumed. */
-export function handleCommentsListKey(app: App, key: string): boolean {
-  if (!app.commentsList) return false
+/** handleThreadListKey returns true when the key was consumed. */
+export function handleThreadListKey(app: App, key: string): boolean {
+  if (!app.threadList) return false
   switch (key) {
     case 'esc':
     case 'c':
-      app.commentsList = null
+      app.threadList = null
       return true
   }
-  const threads = app.threads.threads
+  const threads = app.store.threads
   if (threads.length === 0) return true
 
   switch (key) {
     case 'up':
-    case 'k':
-      if (app.commentsList.cursor > 0) app.commentsList.cursor--
+      if (app.threadList.cursor > 0) app.threadList.cursor--
       return true
     case 'down':
-    case 'j':
-      if (app.commentsList.cursor < threads.length - 1) app.commentsList.cursor++
+      if (app.threadList.cursor < threads.length - 1) app.threadList.cursor++
       return true
     case 'enter': {
       // Open the thread modal rather than jumping straight to code, so threads
       // whose file left the diff are still reachable. Goto-code is `g` inside.
-      const idx = app.commentsList.cursor
-      app.commentsList = null
+      const idx = app.threadList.cursor
+      app.threadList = null
       openModal(app, newThreadModal(idx, '', 0, 0))
       return true
     }
@@ -199,7 +197,7 @@ export function handleModalKey(app: App, key: string): boolean {
 
   // Browse mode — only meaningful with an existing thread.
   if (modal.threadIdx < 0) return true
-  const t = app.threads.threads[modal.threadIdx]
+  const t = app.store.threads[modal.threadIdx]
   if (!t) {
     closeModal(app)
     return true
@@ -207,12 +205,10 @@ export function handleModalKey(app: App, key: string): boolean {
 
   switch (key) {
     case 'up':
-    case 'k':
-      if (modal.selectedMsg > 0) modal.selectedMsg--
+      if (modal.selectedComment > 0) modal.selectedComment--
       return true
     case 'down':
-    case 'j':
-      if (modal.selectedMsg < t.comments.length - 1) modal.selectedMsg++
+      if (modal.selectedComment < t.comments.length - 1) modal.selectedComment++
       return true
     case 'pgup':
     case 'ctrl+u': {
@@ -239,28 +235,28 @@ export function handleModalKey(app: App, key: string): boolean {
       app.inputs.setComposeValue('')
       return true
     case 'e':
-      if (modal.selectedMsg >= 0 && modal.selectedMsg < t.comments.length) {
+      if (modal.selectedComment >= 0 && modal.selectedComment < t.comments.length) {
         modal.mode = ModalMode.Edit
-        modal.editIdx = modal.selectedMsg
-        app.inputs.setComposeValue(t.comments[modal.selectedMsg].body)
+        modal.editIdx = modal.selectedComment
+        app.inputs.setComposeValue(t.comments[modal.selectedComment].body)
       }
       return true
     case 'd': {
-      if (modal.selectedMsg < 0 || modal.selectedMsg >= t.comments.length) return true
-      app.threads.deleteComment(t.id, modal.selectedMsg)
+      if (modal.selectedComment < 0 || modal.selectedComment >= t.comments.length) return true
+      app.store.deleteComment(t.id, modal.selectedComment)
       if (t.comments.length === 0) {
         // No comments left → the thread itself is meaningless. Drop it.
-        app.threads.deleteThread(t.id)
+        app.store.deleteThread(t.id)
         save(app)
         closeModal(app)
         return true
       }
-      if (modal.selectedMsg >= t.comments.length) modal.selectedMsg = t.comments.length - 1
+      if (modal.selectedComment >= t.comments.length) modal.selectedComment = t.comments.length - 1
       save(app)
       return true
     }
     case 'D':
-      app.threads.deleteThread(t.id)
+      app.store.deleteThread(t.id)
       save(app)
       closeModal(app)
       return true
@@ -285,25 +281,25 @@ export function submitModalCompose(app: App): void {
   if (body === '') return
 
   if (modal.mode === ModalMode.Edit) {
-    const t = app.threads.threads[modal.threadIdx]
-    if (t) app.threads.setCommentBody(t.id, modal.editIdx, body)
+    const t = app.store.threads[modal.threadIdx]
+    if (t) app.store.setCommentBody(t.id, modal.editIdx, body)
   } else if (modal.threadIdx >= 0) {
-    const t = app.threads.threads[modal.threadIdx]
+    const t = app.store.threads[modal.threadIdx]
     if (t) {
-      app.threads.appendComment(t.id, { author: app.author, body, role: 'user' })
+      app.store.appendComment(t.id, { author: app.author, body, role: 'user' })
       // Land the browse cursor on the new comment.
-      modal.selectedMsg = t.comments.length - 1
+      modal.selectedComment = t.comments.length - 1
     }
   } else {
-    const t = app.threads.addThread(modal.newThreadFile, modal.newThreadStart, modal.newThreadEnd, {
+    const t = app.store.addThread(modal.newThreadFile, modal.newThreadStart, modal.newThreadEnd, {
       author: app.author,
       body,
       role: 'user',
     })
-    const idx = app.threads.threads.findIndex((x) => x.id === t.id)
+    const idx = app.store.threads.findIndex((x) => x.id === t.id)
     if (idx >= 0) {
       modal.threadIdx = idx
-      modal.selectedMsg = 0
+      modal.selectedComment = 0
     }
   }
 
@@ -321,7 +317,7 @@ export function submitModalCompose(app: App): void {
  * the moment this is called; only the disk write is still in flight.
  */
 function save(app: App): void {
-  void app.threads
+  void app.store
     .save()
     .then(() => {
       app.err = null

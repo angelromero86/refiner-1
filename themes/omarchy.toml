@@ -20,8 +20,8 @@ del_fg  = "#f85149"
 staged_bg = "#0d1a2e"
 staged_fg = "#4493f8"
 
-comment       = "#5a2638"
-comment_label = "#f5e6c8"
+thread       = "#5a2638"
+thread_label = "#f5e6c8"
 
 cursor_bg  = "#26211e"
 background = "#1c1714"

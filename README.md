@@ -5,7 +5,7 @@ trabajar codo a codo con agentes de IA (Claude Code, Cursor, etc.) sobre el mism
 fichero de threads — el mismo que usa la extensión **Refiner** de VSCode.
 
 ```
-┌─ refiner · uncommitted · 3 archivos · 4 comentarios ─────────────────────┐
+┌─ refiner · uncommitted · 3 archivos · 4 threads ─────────────────────────┐
 │ ▾ src/            M app.ts               ●           │  @@ -23,5 +23,8 @@│
 │                   M view.ts                          │   function load…  │
 │                   M render.ts            ●           │ + // Used to dec… │
@@ -32,8 +32,8 @@ Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
 - **Threads de revisión** — anclados a `(file, start, end)`, persistidos en
   `.refiner/comments.json`. Editables a mano, por la extensión de VSCode o por un
   agente.
-- **Minimapa** — banda de color por zona del archivo (comentario > staged > del >
-  add) más el thumb del viewport, en la columna derecha del panel.
+- **Minimapa** — banda de color por zona del archivo (thread > staged > del > add)
+  más el thumb del viewport, en la columna derecha del panel.
 - **Fuzzy finder** — `p` abre un picker multi-término: `con task` encuentra
   `Controllers/Task.ts`.
 - **Tema configurable** — paleta semántica + colores de sintaxis en
@@ -101,18 +101,25 @@ refiner main           # diff de la rama actual contra main
 | `tab` | Ciclar vista DIFF → SPLIT → NORMAL |
 | `p` | Fuzzy finder de archivos |
 | `c` | Modal con todos los threads |
+| `k` | Ayuda: todos los atajos (`?` también) |
 | `b` | Ocultar el árbol cuando el diff tiene el foco |
 | `[` `]` | Estrechar / ensanchar el árbol |
 | `e` | Abrir nvim en el archivo actual |
 | `g` | Abrir lazygit |
 | `r` | Refrescar (re-lee `comments.json` y `git status`) |
-| `q` | Salir |
+| `q` | Salir (pide confirmación; `⌃c` sale sin preguntar) |
 
 Dentro de un thread: `r` responder · `e` editar mensaje · `d` borrar mensaje ·
 `D` borrar thread · `g` ir al código · `⌃u`/`⌃d` scroll · `esc` cerrar.
 Al escribir un comentario: `alt+enter` (o `alt+s` / `ctrl+s`) guarda, `esc` cancela.
 
-El footer lista los atajos del panel enfocado; cambia según dónde estés.
+**`k` abre la lista completa**, agrupada por contexto y scrolleable. No hay barra de
+atajos fija: ocupaba una fila permanente para repetir siempre lo mismo, así que el
+diff se queda con ella. La posición (`1/7` en el árbol, `L 42 · 42/652` en el diff)
+va en el borde inferior de cada panel, donde no cuesta filas.
+
+`j`/`k` **no** navegan. Eran un alias vim no documentado y `k` hacía falta para la
+ayuda; usa las flechas, `⌃u`/`⌃d`, `home`/`end` o `G`.
 
 ## Personalizar
 
@@ -137,9 +144,9 @@ del_fg  = "#fb4934"      # signo -, badge D, errores y el label OUTDATED
 staged_bg = "#23303d"
 staged_fg = "#83a598"
 
-# Indicador "hay comentarios aquí" (gutter + ● en árbol + banda del minimapa)
-comment       = "#4c2b3d"
-comment_label = "#fbf1c7"   # texto sobre el fondo del gutter
+# Indicador "aquí hay un thread" (gutter + ● en árbol + banda del minimapa)
+thread       = "#4c2b3d"
+thread_label = "#fbf1c7"   # texto sobre el fondo del gutter
 
 cursor_bg  = "#3c3836"   # fila bajo el cursor
 background = "#282828"   # fondo de los modales (deben ser opacos)
@@ -182,6 +189,19 @@ arranca en DIFF.
 refiner comparte el store con la extensión **Refiner** de VSCode: los threads viven
 en `.refiner/comments.json` en la raíz del repo, y humanos, editor y agentes leen y
 escriben el mismo fichero. refiner re-lee al pulsar `r`.
+
+### Vocabulario
+
+Dos conceptos, y la UI usa siempre estas palabras para no confundirlos:
+
+- **Thread** — está anclado a `(fichero, rango de líneas)`, tiene `status` y
+  contiene **uno o más comentarios**. Es lo que cuenta el header, lo que lista `c`,
+  lo que marca el `●` del árbol y la banda del minimapa, y lo que borras con `D`.
+- **Comentario** — un mensaje dentro de un thread: autor, rol y cuerpo. Es lo que
+  añade `r` (responder), lo que edita `e` y lo que borra `d`.
+
+En la lista, `+2` detrás del autor significa que ese thread tiene dos comentarios
+más además del primero.
 
 ### Esquema
 

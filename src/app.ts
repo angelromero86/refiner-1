@@ -101,7 +101,7 @@ export interface ThreadModal {
   newThreadStart: number
   newThreadEnd: number
   /** Cursor within the comment list (browse mode). */
-  selectedMsg: number
+  selectedComment: number
   mode: ModalMode
   /** Index of the comment being edited; only valid in Edit mode. */
   editIdx: number
@@ -111,8 +111,15 @@ export interface ThreadModal {
   bodyHeight: number
 }
 
-export interface CommentsListModal {
+export interface ThreadListModal {
   cursor: number
+}
+
+/** The keymap overlay (`k`). Scrollable, because the list outgrows short terminals. */
+export interface HelpModal {
+  scrollY: number
+  /** Visible body rows, written by the renderer so paging knows its step. */
+  bodyHeight: number
 }
 
 /**
@@ -191,10 +198,14 @@ export class App {
    */
   highlights = new Map<string, DiffHighlights>()
 
-  threads: Store
+  /** The review-thread store — `store.threads`, each holding `comments`. */
+  store: Store
   modal: ThreadModal | null = null
-  commentsList: CommentsListModal | null = null
+  threadList: ThreadListModal | null = null
   finder: FinderModal | null = null
+  help: HelpModal | null = null
+  /** True while the quit confirmation is up. `q` and `esc` are easy to hit. */
+  quitConfirm = false
 
   width = 0
   height = 0
@@ -208,23 +219,23 @@ export class App {
   /** Set by the view; invoked after any state mutation. */
   render: () => void = () => {}
 
-  constructor(source: Source, threads: Store) {
+  constructor(source: Source, store: Store) {
     this.source = source
-    this.threads = threads
+    this.store = store
   }
 
   static async create(source: Source): Promise<App> {
     // A broken/absent store must not stop the reviewer from reviewing, so fall
     // back to an empty one and surface the problem in the error banner.
-    let threads: Store
+    let store: Store
     let storeErr: Error | null = null
     try {
-      threads = await Store.load()
+      store = await Store.load()
     } catch (err) {
-      threads = new Store()
+      store = new Store()
       storeErr = err as Error
     }
-    const app = new App(source, threads)
+    const app = new App(source, store)
     app.err = storeErr
     const [name, state] = await Promise.all([gitRepoName(), loadState()])
     app.repoName = name
@@ -378,7 +389,7 @@ export class App {
     // Pick up edits the VSCode extension or an agent may have made to
     // .refiner/comments.json since the last refresh.
     try {
-      this.threads = await Store.load()
+      this.store = await Store.load()
     } catch {
       // Keep the in-memory store rather than losing the reviewer's context.
     }
@@ -484,8 +495,9 @@ export class App {
   }
 
   middleHeight(): number {
-    // header (3) + footer (1)
-    return Math.max(1, this.height - 4)
+    // Header only (3 rows). There is no footer: the keymap moved into the `k`
+    // overlay, which buys the diff a row back.
+    return Math.max(1, this.height - 3)
   }
 
   /** Rows available INSIDE a pane, after its own top+bottom border. */
@@ -550,18 +562,18 @@ export class App {
   // -------------------------------------------------------------- threads
 
   /**
-   * lineHasComment reports whether a working-tree line has a thread anchored to
+   * lineHasThread reports whether a working-tree line has a thread anchored to
    * it. Called per row during render, so it must stay O(threads in file) —
    * which the store's byFile index guarantees.
    */
-  lineHasComment(path: string, newLine: number): boolean {
+  lineHasThread(path: string, newLine: number): boolean {
     if (newLine <= 0 || path === '') return false
-    return this.threads.threadAt(path, newLine) !== null
+    return this.store.threadAt(path, newLine) !== null
   }
 
   fileHasThreads(path: string): boolean {
     if (path === '') return false
-    return this.threads.hasThreadsFor(path)
+    return this.store.hasThreadsFor(path)
   }
 
   /**
@@ -578,7 +590,7 @@ export class App {
    * refiner preserves that field but doesn't yet use it here.
    *
    * Reads the file from disk, so only call it from rare paths (modals, the
-   * comments list) — never from per-row render code.
+   * thread list) — never from per-row render code.
    */
   async isThreadOutdated(t: StoredThread): Promise<boolean> {
     if (this.findFile(t.file) === null) return true
