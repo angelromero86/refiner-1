@@ -12,7 +12,8 @@
     "start": "bun run src/index.ts",
     "test": "bun test",
     "typecheck": "tsc --noEmit",
-    "build": "bun run scripts/build.ts"
+    "build": "bun run scripts/build.ts",
+    "install-skills": "bun run scripts/install-skills.ts"
   },
   "dependencies": {
     "@opentui/core": "^0.5.1",

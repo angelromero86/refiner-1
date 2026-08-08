@@ -1,0 +1,144 @@
+# refiner — configuración de ejemplo
+#
+# Copia esto a ~/.config/refiner/config.toml (o a $XDG_CONFIG_HOME/refiner/config.toml)
+# y descomenta lo que quieras cambiar:
+#
+#     mkdir -p ~/.config/refiner
+#     cp config.example.toml ~/.config/refiner/config.toml
+#
+# Todo es opcional. Los valores que ves comentados SON los defaults, así que este
+# fichero entero comentado se comporta exactamente igual que no tenerlo. refiner
+# nunca escribe aquí: solo lo lee al arrancar. Un valor mal escrito se ignora y el
+# resto del fichero sigue valiendo; un TOML inválido imprime un warning por stderr y
+# arranca con los defaults.
+#
+# `refiner --help` imprime la ruta exacta que está usando.
+
+
+# ---------------------------------------------------------------------- editor
+# Lo que abre la tecla `e`, en la línea donde tengas el cursor.
+# Sin esta clave: $VISUAL, luego $EDITOR, luego nvim.
+# Se parte por espacios, así que admite argumentos: editor = "code -w"
+# editor = "nvim"
+
+# Cómo se le pasa el número de línea al editor. Se deduce del nombre del binario, así
+# que normalmente sobra:
+#   "plus"   → nvim +42 fichero   (vi, vim, nvim, emacs, emacsclient, nano, pico,
+#                                  micro, joe, kak — y el default para lo desconocido)
+#   "suffix" → druk fichero:42    (druk, hx, helix, subl, zed, code, codium, cursor)
+#   "none"   → el editor no acepta línea; abre el fichero y ya
+# editor_line = "suffix"
+
+# Tamaño de la ventana flotante que abren `e` y `g`, en % del terminal.
+# Solo lo respetan tmux y zellij: sin multiplexor el hijo se queda la pantalla entera
+# y no hay nada que dimensionar. Se recorta a 20..100.
+# popup_width  = 90
+# popup_height = 90
+
+# Recargar solo cuando un agente, la extensión de VSCode o git cambian algo bajo
+# refiner (vigila `.refiner/` y `.git/`). A false, refrescas tú con `r`.
+# watch = true
+
+
+# ------------------------------------------------------------------------ tema
+# Los nombres describen el ROL, no el color. La paleta por defecto es Gruvbox Dark.
+#
+# primary    = "#fe8019"   # nombre del repo en el header, borde del header, borde de
+#                          # los modales, badge ? (untracked)
+# accent     = "#fabd2f"   # teclas resaltadas (header y overlays), badge M,
+#                          # directorios del árbol, marcador ▶ de la fila elegida
+# focus      = "#8ec07c"   # borde del panel enfocado, labels de modo del header,
+#                          # badge R/C
+# muted      = "#7c6f64"   # gutter de números, borde del panel inactivo
+# foreground = "#ebdbb2"   # texto por defecto: contexto del diff, cuerpos de
+#                          # comentario, y el tinte del thumb del minimapa
+
+# Hunks del diff. Los fondos son suaves a propósito: el syntax highlighting pinta
+# encima, así que un fondo saturado taparía los colores de token.
+# add_bg  = "#32361a"
+# del_bg  = "#402120"
+# add_fg  = "#b8bb26"      # signo + del gutter, badge A del árbol
+# del_fg  = "#fb4934"      # signo -, badge D, banner de error, label OUTDATED
+
+# Líneas ya en el índice (staged).
+# staged_bg = "#23303d"
+# staged_fg = "#83a598"
+
+# "Aquí hay un thread". Son tres roles distintos y por eso son tres claves:
+# thread        = "#4c2b3d"   # FONDO del gutter en las líneas comentadas, y la banda
+#                             # del minimapa. Tiene que dejar leer texto encima.
+# thread_label  = "#fbf1c7"   # los números de línea dibujados sobre ese fondo
+# thread_marker = "#d3869b"   # el ● junto a los ficheros con threads en el árbol.
+#                             # Es un primer plano: si reutilizas el color de fondo,
+#                             # el punto se vuelve invisible.
+
+# tree_guide = "#665c54"   # las líneas ├ └ │ que dibujan la estructura del árbol
+# cursor_bg  = "#3c3836"   # fila bajo el cursor
+# background = "#282828"   # lienzo de los paneles y fondo de los modales. Los
+#                          # overlays TIENEN que ser opacos o el diff se transparenta
+#                          # a través de su texto.
+
+# En themes/ hay paletas alternativas listas para copiar.
+
+
+# ------------------------------------------------------------------- sintaxis
+# false vuelve al add/del en verde/rojo plano, sin colores de token.
+# syntax_highlight = true
+
+# Colores por grupo de captura de tree-sitter. La tabla se MEZCLA sobre los defaults,
+# así que recolorear un grupo no borra el resto. La búsqueda cae por puntos:
+# `keyword.function` usa `keyword` si no tiene entrada propia, igual que en los
+# editores. Estos son todos los grupos que trae refiner por defecto.
+#
+# [syntax]
+# keyword     = "#fb4934"
+# conditional = "#fb4934"
+# repeat      = "#fb4934"
+# label       = "#fb4934"
+# exception   = "#fb4934"
+#
+# function    = "#b8bb26"
+# string      = "#b8bb26"
+# character   = "#b8bb26"
+# literal     = "#b8bb26"
+#
+# number      = "#d3869b"
+# boolean     = "#d3869b"
+# float       = "#d3869b"
+# constant    = "#d3869b"
+#
+# type        = "#fabd2f"
+# constructor = "#fabd2f"
+# attribute   = "#fabd2f"
+# annotation  = "#fabd2f"
+# title       = "#fabd2f"
+#
+# variable    = "#ebdbb2"
+# property    = "#ebdbb2"
+# parameter   = "#ebdbb2"
+# field       = "#ebdbb2"
+# namespace   = "#ebdbb2"
+# module      = "#ebdbb2"
+# operator    = "#ebdbb2"
+# text        = "#ebdbb2"
+# emphasis    = "#ebdbb2"
+#
+# tag         = "#8ec07c"
+# include     = "#8ec07c"
+# preproc     = "#8ec07c"
+# reference   = "#8ec07c"
+#
+# uri         = "#83a598"
+# punctuation = "#a89984"
+# comment     = "#928374"
+
+
+# ----------------------------------------------------------------------- iconos
+# Glifos de las carpetas del árbol. Por defecto son iconos de Nerd Font
+# (nf-fa-folder_open / nf-fa-folder). Vale cualquier string, emoji incluido: el
+# ancho se mide en celdas y se rellena, así que un emoji de 2 celdas no descuadra
+# los nombres.
+#
+# [icons]
+# folder_open   = ""
+# folder_closed = ""

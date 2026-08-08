@@ -59,8 +59,9 @@ export enum Focus {
 /**
  * What the file tree lists.
  *
- *   Changes → only files that differ (the default; reviewing is the point)
- *   All     → every file in the repo, so a thread can be anchored anywhere
+ *   All     → every file in the repo (the default), so a thread can be anchored
+ *             anywhere and the tree is never empty
+ *   Changes → only files that differ, for working through a review
  *
  * A file with no changes is shown as a diff made entirely of context lines, so the
  * existing renderers handle it unmodified — see diff.ts `contextOnly`.
@@ -194,7 +195,7 @@ export class App {
   nodes: Node[] = []
   flat: FlatNode[] = []
   cursor = 0
-  fileMode: FileMode = FileMode.Changes
+  fileMode: FileMode = FileMode.All
   /**
    * Which folders are collapsed, kept per mode. One shared set would mean that
    * collapsing things while browsing the whole repo silently rearranged the much
@@ -342,6 +343,14 @@ export class App {
     this.loading = false
     this.nodes = buildTree(this.files)
     this.flat = flatten(this.nodes, this.collapsed)
+    // Fold ALL down once — on the first load or the first toggle into it, whichever
+    // comes first. A repo of hundreds of files is unreadable fully expanded, but
+    // doing it on every load would keep closing folders the user just opened.
+    if (this.fileMode === FileMode.All && !this.allModeCollapsed) {
+      this.allModeCollapsed = true
+      this.collapseAllButPath(this.selectedPath)
+      this.flat = flatten(this.nodes, this.collapsed)
+    }
     if (this.cursor >= this.flat.length) {
       this.cursor = this.flat.length > 0 ? this.flat.length - 1 : 0
     }
@@ -548,11 +557,6 @@ export class App {
     // we are switching TO, and loadFiles is what builds it.
     await this.loadFiles()
 
-    if (this.fileMode === FileMode.All && !this.allModeCollapsed) {
-      this.allModeCollapsed = true
-      this.collapseAllButPath(this.selectedPath)
-      this.flat = flatten(this.nodes, this.collapsed)
-    }
     if (this.cursor >= this.flat.length) this.cursor = Math.max(0, this.flat.length - 1)
     this.syncCursorToSelection()
     this.render()

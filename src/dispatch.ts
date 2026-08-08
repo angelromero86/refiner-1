@@ -184,6 +184,16 @@ function handleHelpKey(app: App, key: string): boolean {
 }
 
 function handleTreeKey(app: App, key: string): boolean {
+  // Keys that don't act on a row go first. An empty tree is exactly when you most
+  // need Tab — no changes to review means CHANGES has nothing in it, and putting
+  // this after the guard below left the UI with no way out.
+  if (key === 'tab') {
+    // Contextual: in the tree Tab switches WHAT is listed, in the diff it
+    // switches HOW the file is shown.
+    void app.toggleFileMode()
+    return true
+  }
+
   if (app.flat.length === 0) return false
   switch (key) {
     case 'up':
@@ -197,11 +207,6 @@ function handleTreeKey(app: App, key: string): boolean {
       return true
     case 'enter':
       activateCursor(app)
-      return true
-    case 'tab':
-      // Contextual: in the tree Tab switches WHAT is listed, in the diff it
-      // switches HOW the file is shown.
-      void app.toggleFileMode()
       return true
     case ' ': {
       const node = app.flat[app.cursor]?.node

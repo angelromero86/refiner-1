@@ -55,6 +55,11 @@ export interface Config {
   editor: EditorConfig
   popup: PopupConfig
   icons: IconConfig
+  /**
+   * Reload by itself when an agent, the VSCode extension or git changes something
+   * under refiner. Off falls back to pressing `r`.
+   */
+  watch: boolean
   warning?: string
 }
 
@@ -142,6 +147,7 @@ export function defaultConfig(): Config {
     editor: { command, lineStyle: resolveLineStyle(command, undefined) },
     popup: { widthPct: DEFAULT_POPUP_PCT, heightPct: DEFAULT_POPUP_PCT },
     icons: { ...DEFAULT_ICONS },
+    watch: true,
   }
 }
 
@@ -189,7 +195,13 @@ export async function loadConfig(path = configPath()): Promise<Config> {
     heightPct: resolvePct(obj['popup_height']),
   }
 
-  return { theme, editor, popup, icons: resolveIcons(obj['icons']) }
+  return {
+    theme,
+    editor,
+    popup,
+    icons: resolveIcons(obj['icons']),
+    watch: typeof obj['watch'] === 'boolean' ? obj['watch'] : true,
+  }
 }
 
 /**

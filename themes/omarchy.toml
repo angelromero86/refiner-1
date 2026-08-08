@@ -7,7 +7,7 @@
 # any of them.
 
 primary    = "#d48472"   # app name, header border, modal borders
-accent     = "#d99a3a"   # footer hotkeys, M badge, dirs, ▶ marker
+accent     = "#d99a3a"   # key labels in header/overlays, M badge, dirs, ▶ marker
 focus      = "#c4ba6e"   # focused pane, mode label
 muted      = "#4a3a2e"   # line-number gutter, idle border
 foreground = "#e6cfa8"   # default text

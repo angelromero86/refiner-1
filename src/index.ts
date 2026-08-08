@@ -9,13 +9,14 @@
 import { createCliRenderer } from '@opentui/core'
 import { App } from './app.ts'
 import { installKeyHandling } from './dispatch.ts'
-import { gitUserName, Mode, type Source } from './git.ts'
+import { gitUserName, Mode, repoRoot, type Source } from './git.ts'
 import { loadConfig } from './config.ts'
 import { statePath } from './state.ts'
 import { configPath } from './theme.ts'
 import { applyTheme } from './styles.ts'
 import { configureAssetRoot } from './syntax.ts'
 import { View } from './view.ts'
+import { installWatchers } from './watch.ts'
 
 const USAGE = `refiner — git code-review TUI
 
@@ -44,7 +45,7 @@ async function main(): Promise<void> {
   // Must run before anything reaches into OpenTUI's asset resolution.
   configureAssetRoot()
 
-  const { theme, editor, popup, icons, warning } = await loadConfig()
+  const { theme, editor, popup, icons, watch, warning } = await loadConfig()
   if (warning) process.stderr.write(`warning: ${warning}\n`)
   applyTheme(theme)
 
@@ -76,6 +77,15 @@ async function main(): Promise<void> {
   app.width = renderer.width
   app.height = renderer.height
   await app.loadFiles()
+
+  // After the first load, so a burst of startup events can't fight it.
+  if (watch) {
+    try {
+      installWatchers(app, await repoRoot())
+    } catch {
+      // Not watchable: `r` still refreshes on demand.
+    }
+  }
 }
 
 /**

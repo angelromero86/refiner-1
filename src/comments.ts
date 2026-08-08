@@ -142,8 +142,19 @@ export class Store {
   async save(): Promise<void> {
     if (this.path === '') this.path = join(await repoRoot(), '.refiner', 'comments.json')
     await mkdir(join(this.path, '..'), { recursive: true })
-    await Bun.write(this.path, JSON.stringify(this.data, null, 2) + '\n')
+    const text = JSON.stringify(this.data, null, 2) + '\n'
+    this.lastWrittenText = text
+    await Bun.write(this.path, text)
   }
+
+  /**
+   * Exactly what save() last put on disk.
+   *
+   * The file watcher compares against this to tell an edit by the extension or an
+   * agent apart from the echo of our own write — comparing content rather than
+   * timestamps because both are atomic replaces and a time window would race.
+   */
+  lastWrittenText: string | null = null
 
   /** threadsForFile returns threads on `path`, sorted by start line ascending. */
   threadsForFile(path: string): StoredThread[] {
