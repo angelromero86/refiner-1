@@ -296,12 +296,24 @@ export class View {
     const counts = `${app.files.length} files · ${app.stagedFileCount()} staged · ${n} ${n === 1 ? 'thread' : 'threads'}`
     // The keymap lives behind `k` now, so the header has to advertise it — it is
     // the only thing on screen that tells you the app has more keys.
-    const right: TextChunk[] = [
+    const right: TextChunk[] = []
+    // A store whose file could not be read shows an empty (or stale) thread
+    // count, which is exactly the lie that makes the data loss invisible. Say so
+    // right next to the count, where it costs no rows and hides nothing.
+    //
+    // Derived from the store on every frame rather than latched into `err`: the
+    // error banner is dismissed by `r`, and `r` used to be the natural reaction
+    // to it, which disarmed the only warning while the unwritable store stayed
+    // loaded. This one goes away when — and only when — a load succeeds.
+    if (app.store.readOnly) {
+      right.push(chunk('store read-only', { ...S.del, bold: true }), chunk(' · ', S.dim))
+    }
+    right.push(
       chunk(counts, S.text),
       chunk('  ', S.dim),
       chunk('k', S.hotkey),
       chunk(' keys', S.dim),
-    ]
+    )
 
     // The border sits outside the box width; the padding is inside it.
     const contentW = Math.max(1, app.width - 4)
@@ -450,7 +462,9 @@ export class View {
     const contentW = Math.max(1, w - 1)
     const focused = app.focus === Focus.Content
     const [selStart, selEnd] = app.selectionRange()
-    const stagedSet = app.staged.get(app.selectedPath) ?? new Set<number>()
+    // Intent first, git second: a keypress repaints as staged in the same frame
+    // rather than one git round-trip later.
+    const stagedSet = app.stagedFor(app.selectedPath)
     // Deletions only exist in the pre-change document, additions and context in
     // the post-change one — so each row looks its runs up on the matching side.
     const hl = app.activeHighlights()
@@ -560,7 +574,7 @@ export class View {
 
     const lines = cached.unified
     const total = lines.length
-    const stagedSet = app.staged.get(app.selectedPath) ?? new Set<number>()
+    const stagedSet = app.stagedFor(app.selectedPath)
 
     const marks = Array.from({ length: h }, () => ({
       comment: false,

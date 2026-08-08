@@ -12,13 +12,17 @@
  *   - cache, staged, loadingDiff and collapsed are all keyed by file path.
  *   - The async loads that used to be tea.Cmds are plain async methods; each one
  *     re-checks that its result is still relevant before applying it, because a
- *     second load can be kicked off while the first is in flight.
+ *     second load can be kicked off while the first is in flight. That check is
+ *     `loadGen` — see its comment; it is what lets the key handler fire a reload
+ *     without awaiting it.
  */
 
 import {
   align,
   computeStagedIndices,
   contextOnly,
+  creationMode,
+  deletionMode,
   hunkStarts,
   RowKind,
   filterContentLines,
@@ -114,7 +118,53 @@ export interface RenderedDiff {
   split: AlignedRow[]
   current: Line[]
   currentIdx: number[]
+  /**
+   * `new file mode <mode>` from git's diff header, or null when the file exists
+   * in HEAD. Captured here because `filterContentLines` throws the header away
+   * and `buildPartialPatch` cannot recover it from the lines — see
+   * `creationMode` in `src/diff.ts`. Staging is its only reader.
+   */
+  createMode: string | null
+  /**
+   * `deleted file mode <mode>` from that same header, or null when the file
+   * survives. Same reason, opposite end: without it a fully-selected deletion
+   * stages as an empty blob instead of removing the entry, and a truncated file
+   * is indistinguishable from a deleted one once the header is gone. See
+   * `deletionMode` in `src/diff.ts`.
+   */
+  deleteMode: string | null
 }
+
+/**
+ * One queued staging operation.
+ *
+ * Jobs are plain data rather than closures so the pending map can coalesce them
+ * by path: a newer job for a path replaces the older one outright. That is only
+ * sound because a job carries the COMPLETE desired state rather than a delta —
+ * the same reset-then-apply invariant that makes the patch safe. See the header
+ * of `src/staging.ts`.
+ */
+export type StagingJob =
+  | {
+      kind: 'partial'
+      path: string
+      file: ChangedFile
+      /** Unified-line indices that should end up in the index. */
+      desired: Set<number>
+      /** The diff the decision was taken against, held by reference. */
+      unified: Line[]
+      /**
+       * `RenderedDiff.createMode` / `.deleteMode` for that same diff. Carried on
+       * the job rather than re-read from the cache when it runs, because
+       * `invalidateStagedDiff` can drop the entry while the job waits its turn.
+       */
+      createMode: string | null
+      deleteMode: string | null
+    }
+  | { kind: 'full'; path: string; file: ChangedFile; want: boolean }
+
+/** Shared empty result for `stagedFor`, so the hot render path allocates nothing. */
+const EMPTY_STAGED: ReadonlySet<number> = new Set<number>()
 
 /** The FSM state of the thread modal. */
 export enum ModalMode {
@@ -126,6 +176,16 @@ export enum ModalMode {
 export interface ThreadModal {
   /** Index into store.threads, or -1 while composing a brand-new thread. */
   threadIdx: number
+  /**
+   * Id of the thread `threadIdx` points at, or '' while composing a new one.
+   *
+   * The index is what the renderer and the key handler use, but it is only valid
+   * for one shape of `store.threads`: a save that merges somebody else's copy of
+   * the file rebuilds that array, and an index left over from the old one would
+   * put `d`/`D` on a different thread. The id is what survives, so it is the id
+   * the modal is re-anchored by (`src/threads-ui.ts`).
+   */
+  threadId: string
   /** New-thread anchor (only meaningful while threadIdx === -1). */
   newThreadFile: string
   newThreadStart: number
@@ -247,6 +307,63 @@ export class App {
    */
   highlights = new Map<string, DiffHighlights>()
 
+  /**
+   * Which "generation" of on-disk state the loads in flight belong to.
+   *
+   * The rule, and there is only one:
+   *
+   *   Anything that invalidates the state derived from disk bumps `loadGen`
+   *   SYNCHRONOUSLY (that is `clearCaches()`, and only it). Every async load
+   *   captures `loadGen` on its first line and writes nothing shared —
+   *   `files`/`nodes`/`flat`/`cache`/`staged`/`highlights`/`err`/`loading` — once
+   *   its generation has stopped being the current one.
+   *
+   * This is what makes `tab` safe to fire un-awaited. The intent is synchronous
+   * (`fileMode` flips during the key dispatch, because `preventDefault()` only
+   * counts there — see `src/dispatch.ts`); what is guarded is the LANDING of the
+   * result. Two presses inside git's latency leave two loads in flight, and
+   * without this the slower one — `loadAllFiles` runs two git commands to
+   * `loadChangedFiles`' one, so it is systematically the slower — overwrote
+   * `files` after the mode had flipped back. The header said CHANGES while the
+   * tree listed the whole repo.
+   *
+   * Discarding is the right answer here and it is NOT the right answer for
+   * staging: these are READS, where the newest intent invalidates the older one
+   * and a dropped result costs nothing, whereas a dropped staging keypress loses
+   * the user's work. That is why `src/staging.ts` serializes instead. Don't
+   * unify them.
+   *
+   * The precondition of the whole design: a bump is always immediately followed
+   * by a load that will repopulate the screen. Bump before starting, never in
+   * the middle — see `onResize()` for the trap.
+   */
+  private loadGen = 0
+
+  // ----------------------------------------------------------- staging queue
+  // Written synchronously by the key handler, consumed by the serial drain in
+  // `src/staging.ts`.
+
+  /**
+   * path → the staged set the user has just ASKED for, kept only while that path
+   * has work in the queue.
+   *
+   * `staged` above is git's answer to the PREVIOUS keypress and only lands a
+   * reload later. A second press that built its patch from it would describe the
+   * first press's line as unstaged and silently drop it, because the patch is a
+   * complete desired set and not a delta.
+   */
+  stagingIntent = new Map<string, Set<number>>()
+  /** The same, for the whole-file toggle: true = "I want all of it in the index". */
+  stagingFullIntent = new Map<string, boolean>()
+  /**
+   * At most ONE queued job per path — this map IS the coalescing. A burst of
+   * keypresses collapses into one or two git operations carrying the latest
+   * intent instead of one operation per press.
+   */
+  stagingPending = new Map<string, StagingJob>()
+  /** The drain in progress, or null when the queue is idle. */
+  stagingRunning: Promise<void> | null = null
+
   /** The review-thread store — `store.threads`, each holding `comments`. */
   store: Store
   modal: ThreadModal | null = null
@@ -261,6 +378,13 @@ export class App {
   loading = true
   err: Error | null = null
 
+  /**
+   * Absolute path of the repo root, and also the process cwd — `main()` chdirs
+   * there before anything else. Every path in the app is relative to it, so the
+   * only consumers are the edges where a path leaves the process and cannot rely
+   * on our cwd (today: the editor argv in `externals.ts`).
+   */
+  root = ''
   /** Author label for new comments; resolved once at startup. */
   author = 'anon'
   /** Which editor `e` launches, and how it takes a line number. */
@@ -280,18 +404,14 @@ export class App {
   }
 
   static async create(source: Source): Promise<App> {
-    // A broken/absent store must not stop the reviewer from reviewing, so fall
-    // back to an empty one and surface the problem in the error banner.
-    let store: Store
-    let storeErr: Error | null = null
-    try {
-      store = await Store.load()
-    } catch (err) {
-      store = new Store()
-      storeErr = err as Error
-    }
+    // A broken/absent store must not stop the reviewer from reviewing, so a file
+    // that won't parse yields an empty store and the problem goes to the error
+    // banner. `loadOrReadOnly` is what keeps that empty store from being a loaded
+    // gun: it never read the file, so it never writes it, and the header says so
+    // for as long as that holds.
+    const store = await Store.loadOrReadOnly()
     const app = new App(source, store)
-    app.err = storeErr
+    app.err = store.loadError
     const [name, state] = await Promise.all([gitRepoName(), loadState()])
     app.repoName = name
     app.treeAutoHide = state.treeAutoHide
@@ -310,15 +430,83 @@ export class App {
   }
 
   /**
-   * clearCaches drops everything derived from on-disk state. Called after any
-   * operation (staging, external editor, manual refresh) that can change what
-   * `git status` / `git diff` will report.
+   * clearCaches drops everything derived from on-disk state, AND cancels the
+   * loads already in flight. Called after any operation (external editor, manual
+   * refresh, mode switch) that can change what `git status` / `git diff` will
+   * report.
+   *
+   * The generation bump is the second half of that sentence: emptying the maps
+   * only helps if the load that was reading git a moment ago cannot refill them
+   * with what it found before the change. Every caller — `refresh()`,
+   * `toggleFileMode()` and `src/externals.ts` — starts a fresh load immediately
+   * afterwards, which is the precondition that keeps the bump from stranding the
+   * screen on "Loading…". Bump before starting a load, never in the middle of
+   * one.
+   *
+   * Deliberately NOT the staging intent maps. Their contract is the opposite of
+   * this one: they hold what the user has just asked for and git has not been
+   * told yet. Clearing them here would send the next keypress back to reading
+   * git's stale answer, which is exactly the race the queue exists to close.
    */
   clearCaches(): void {
+    this.loadGen++
     this.cache.clear()
     this.staged.clear()
     this.loadingDiff.clear()
     this.highlights.clear()
+  }
+
+  /**
+   * invalidateStagedDiff drops what a staging write actually made stale, which
+   * is strictly less than `clearCaches()` throws away.
+   *
+   * Writing the index cannot change any file's working tree, and the rendered
+   * diff comes from `git diff HEAD` — so `cache` and `highlights` stay valid and
+   * only the staged-line set does not. Keeping the rendered diff is what lets a
+   * keypress landing mid-operation still work: `toggleStaged` needs the cache to
+   * map the cursor to unified indices, and with the cache cleared it returned
+   * silently for the whole reload window, losing the press.
+   *
+   * The path about to be reloaded keeps its entry because `loadFiles()`
+   * overwrites it. Any other path (a whole-file toggle from the tree) is dropped
+   * instead, or `ensureDiffLoaded` would serve its stale staged marks for ever.
+   *
+   * Deliberately does NOT bump `loadGen` either, for the same reason: the loads
+   * in flight are still reading the same working tree (writing the index cannot
+   * change it), so killing them would only cost a repaint. It is why
+   * `loadHighlights` keeps its own `cache.has` check on top of the generation
+   * guard — this is the one invalidation the generation does not describe.
+   */
+  invalidateStagedDiff(path: string): void {
+    this.staged.delete(path)
+    if (path === this.selectedPath) return
+    this.cache.delete(path)
+    this.highlights.delete(path)
+  }
+
+  /**
+   * stagedFor is the single answer to "which lines does this file show as
+   * staged": the queued intent while one exists, otherwise git's answer. Painting
+   * the intent is what makes `space` feel instant — git is ~21 ms behind.
+   */
+  stagedFor(path: string): ReadonlySet<number> {
+    return this.stagingIntent.get(path) ?? this.staged.get(path) ?? EMPTY_STAGED
+  }
+
+  /**
+   * stagingIdle resolves once the staging queue has drained. For tests and for
+   * shutdown paths only — nothing in the key path may await it.
+   */
+  async stagingIdle(): Promise<void> {
+    let p = this.stagingRunning
+    while (p !== null) {
+      await p
+      const next = this.stagingRunning
+      // A job can queue more work, so wait for the new drain too — but never
+      // spin on a handle that has already settled.
+      if (next === p) return
+      p = next
+    }
   }
 
   findFile(path: string): ChangedFile | null {
@@ -328,28 +516,54 @@ export class App {
 
   // ---------------------------------------------------------------- loading
 
+  /**
+   * listFiles is the one git call `loadFiles` makes, split out so the mode it
+   * runs for is an argument rather than a field read mid-expression — and so a
+   * test can gate it. `protected` for the second reason only.
+   */
+  protected async listFiles(mode: FileMode): Promise<ChangedFile[]> {
+    return mode === FileMode.All ? loadAllFiles(this.source) : loadChangedFiles(this.source)
+  }
+
   async loadFiles(): Promise<void> {
+    // Both captured before the first await: `mode` is what this load is FOR, and
+    // `gen` is what makes its result discardable. See `loadGen`.
+    const gen = this.loadGen
+    const mode = this.fileMode
+    let files: ChangedFile[]
     try {
-      this.files =
-        this.fileMode === FileMode.All
-          ? await loadAllFiles(this.source)
-          : await loadChangedFiles(this.source)
+      files = await this.listFiles(mode)
     } catch (err) {
+      // A discarded load's failure must not paint the banner over a healthy view
+      // — the banner replaces the whole tree pane. The load that superseded us
+      // owns `err` and `loading` now.
+      if (gen !== this.loadGen) return
       this.loading = false
       this.err = err as Error
       this.render()
       return
     }
+    // One guard, above the WHOLE application block: the cursor clamp and the
+    // selection handling below belong to the current tree as much as `files`
+    // does, and a stale load must touch neither.
+    if (gen !== this.loadGen) return
+    this.files = files
     this.loading = false
+    // Resolved once, from `mode`, rather than through the `collapsed` getter,
+    // which reads `this.fileMode` at call time. Under the guard the two agree;
+    // spelling it out is what stops them drifting apart again — a tree built for
+    // ALL flattened against the CHANGES set is how the contradiction started.
+    const collapsed = this.collapsedByMode[mode]
     this.nodes = buildTree(this.files)
-    this.flat = flatten(this.nodes, this.collapsed)
+    this.flat = flatten(this.nodes, collapsed)
     // Fold ALL down once — on the first load or the first toggle into it, whichever
     // comes first. A repo of hundreds of files is unreadable fully expanded, but
     // doing it on every load would keep closing folders the user just opened.
-    if (this.fileMode === FileMode.All && !this.allModeCollapsed) {
+    // Stays UNDER the guard: a discarded load must not consume the one-time flag.
+    if (mode === FileMode.All && !this.allModeCollapsed) {
       this.allModeCollapsed = true
-      this.collapseAllButPath(this.selectedPath)
-      this.flat = flatten(this.nodes, this.collapsed)
+      this.collapseAllButPath(this.selectedPath, collapsed)
+      this.flat = flatten(this.nodes, collapsed)
     }
     if (this.cursor >= this.flat.length) {
       this.cursor = this.flat.length > 0 ? this.flat.length - 1 : 0
@@ -373,18 +587,26 @@ export class App {
   /**
    * loadDiffPair runs the working-tree diff and the index diff concurrently and
    * derives the staged-line indices from the pair. Shared by the UI refresh and
-   * the full-file stage/unstage decision.
+   * the full-file stage/unstage decision. `protected` so a test can gate it.
    */
-  private async loadDiffPair(file: ChangedFile): Promise<{
+  protected async loadDiffPair(file: ChangedFile): Promise<{
     combined: Line[]
     aligned: AlignedRow[]
     stagedIdx: Set<number> | null
+    createMode: string | null
+    deleteMode: string | null
   }> {
     // A file with no changes has no diff to ask git for; it is displayed as one
     // made entirely of context lines instead. Only reachable in ALL mode.
     if (!isChanged(file)) {
       const combined = await this.readAsContext(file.path)
-      return { combined, aligned: align(combined), stagedIdx: null }
+      return {
+        combined,
+        aligned: align(combined),
+        stagedIdx: null,
+        createMode: null,
+        deleteMode: null,
+      }
     }
     const [combinedText, stagedText] = await Promise.all([
       loadDiff(this.source, file),
@@ -392,11 +614,21 @@ export class App {
     ])
     const combined = filterContentLines(parse(combinedText))
     const aligned = align(combined)
+    // Read before the header lines are filtered out. Both of `loadDiff`'s
+    // uncommitted branches answer this the same way — `git diff HEAD` for an
+    // `A`/`AM` file and `git diff --no-index -- /dev/null <path>` for a `?` one
+    // both emit `new file mode` — so one rule covers every file missing from
+    // HEAD, including the new half of a rename.
+    const createMode = creationMode(combinedText)
+    // Read from the same text and for the same reason: a file the user deleted
+    // and one they truncated to zero bytes leave identical `Line[]`, and only
+    // the header separates "remove the entry" from "stage an empty blob".
+    const deleteMode = deletionMode(combinedText)
     let stagedIdx: Set<number> | null = null
     if (stagedText !== '') {
       stagedIdx = computeStagedIndices(combined, filterContentLines(parse(stagedText)))
     }
-    return { combined, aligned, stagedIdx }
+    return { combined, aligned, stagedIdx, createMode, deleteMode }
   }
 
   /**
@@ -409,6 +641,8 @@ export class App {
   private async readAsContext(path: string): Promise<Line[]> {
     const MAX_BYTES = 2 * 1024 * 1024
     try {
+      // `path` is repo-root-relative and `Bun.file` resolves against the cwd, so
+      // this is only correct because `main()` chdirs to the root at startup.
       const f = Bun.file(path)
       const size = f.size
       if (size > MAX_BYTES) {
@@ -424,11 +658,30 @@ export class App {
   }
 
   async loadDiffFor(file: ChangedFile): Promise<void> {
+    const gen = this.loadGen
     this.loadingDiff.add(file.path)
     try {
-      const { combined, aligned, stagedIdx } = await this.loadDiffPair(file)
+      const { combined, aligned, stagedIdx, createMode, deleteMode } = await this.loadDiffPair(file)
+      // Above `cache.set`, above `staged.set`, and above `navigateToPendingLine`:
+      // a discarded load that refilled the cache would put the PRE-staging diff
+      // back after `clearCaches()` had dropped it, and one that consumed
+      // `pendingNavLine` would lose the jump for good. The `file.path ===
+      // this.selectedPath` check below answers a different question — "is this
+      // file still the visible one?" — and both are needed.
+      //
+      // Returning from inside the `try` still runs the `finally`, so
+      // `loadingDiff` is cleaned up; it skips the trailing `render()` and
+      // `loadHighlights()`, which is what we want for a result nobody will show.
+      if (gen !== this.loadGen) return
       const { out: current, idx: currentIdx } = filterCurrentView(combined)
-      this.cache.set(file.path, { unified: combined, split: aligned, current, currentIdx })
+      this.cache.set(file.path, {
+        unified: combined,
+        split: aligned,
+        current,
+        currentIdx,
+        createMode,
+        deleteMode,
+      })
       if (stagedIdx) this.staged.set(file.path, stagedIdx)
       else this.staged.delete(file.path)
 
@@ -443,6 +696,9 @@ export class App {
         this.ensureCursorVisible()
       }
     } catch (err) {
+      // Same rule as `loadFiles`: a superseded load does not get to paint the
+      // banner over the view that replaced it.
+      if (gen !== this.loadGen) return
       this.err = err as Error
     } finally {
       this.loadingDiff.delete(file.path)
@@ -457,11 +713,18 @@ export class App {
    * just leaves the diff in its plain colors.
    */
   private async loadHighlights(path: string): Promise<void> {
+    const gen = this.loadGen
     if (this.highlights.has(path)) return
     const cached = this.cache.get(path)
     if (!cached) return
     const hl = await highlightDiff(path, cached.unified)
-    // The cache may have been dropped while we were parsing (staging, refresh).
+    // These runs describe `cached.unified`. Two ways it can stop being the diff
+    // on screen while tree-sitter parses, and they do not overlap:
+    // an invalidation (generation bumped — and a reload may already have put a
+    // DIFFERENT diff back under this key, which `cache.has` would happily
+    // accept), or a staging write dropping this path's entry on its own
+    // (`invalidateStagedDiff`, which deliberately leaves the generation alone).
+    if (gen !== this.loadGen) return
     if (!this.cache.has(path)) return
     this.highlights.set(path, hl)
     if (path === this.selectedPath) this.render()
@@ -488,13 +751,36 @@ export class App {
    */
   async refresh(): Promise<void> {
     this.clearCaches()
+    const gen = this.loadGen
+    // Let any save in flight finish first. It is about to be replaced by a fresh
+    // store, and a store dropped mid-save takes its unwritten edits with it.
+    await this.store.flush()
     // Pick up edits the VSCode extension or an agent may have made to
     // .refiner/comments.json since the last refresh.
     try {
       this.store = await Store.load()
-    } catch {
-      // Keep the in-memory store rather than losing the reviewer's context.
+    } catch (err) {
+      // Keep the in-memory store rather than losing the reviewer's context, but
+      // stop it writing: what is on disk now is not what we are holding, and a
+      // save is a whole-file replace.
+      //
+      // Deliberately does NOT set `err`. This runs after every staging operation
+      // and on every watcher event, and the banner replaces the entire tree pane
+      // (`src/view.ts` buildTree), so setting it here would make the file list
+      // vanish each time a line is staged while the file is broken. The signal
+      // instead rides the header, which costs no rows and — being derived from
+      // `store.readOnly` rather than latched — cannot be dismissed by `r` while
+      // the store is still poisoned. The full explanation arrives at the moment
+      // it is actionable: when the reviewer tries to write.
+      this.store.markUnreadable(err as Error)
     }
+    // Only the file reload is discardable, and the guard sits here — BELOW the
+    // store half — on purpose. Waiting for the save in flight and poisoning a
+    // store whose file broke under us are facts about the disk, not about which
+    // view is current: skipping either would leave a store that thinks it is
+    // synced with bytes it never read. What a superseded refresh must not do is
+    // spend a `git status` on a change set somebody newer is already loading.
+    if (gen !== this.loadGen) return
     await this.loadFiles()
   }
 
@@ -502,6 +788,13 @@ export class App {
     this.width = width
     this.height = height
     // Split-side widths depend on terminal size, so the aligned cache is stale.
+    //
+    // `cache.clear()` and NOT `clearCaches()`, however tempting the tidy-up
+    // looks: this is the one invalidation that can run with nothing selected —
+    // a resize during startup is perfectly ordinary — and the generation bump
+    // would then kill the very first `loadFiles()` with nothing queued to
+    // replace it. `loading` would stay true and "Loading…" is the whole tree
+    // pane. The rule is bump-then-load; here there may be no load.
     this.cache.clear()
     const file = this.selectedPath !== '' ? this.findFile(this.selectedPath) : null
     if (file) await this.loadDiffFor(file)
@@ -537,6 +830,11 @@ export class App {
    * Entering ALL collapses every folder except the ones leading to the selected
    * file — a repo of a few hundred files is unreadable fully expanded. Leaving it
    * drops a selection that has no changes, since it would not be in the list.
+   *
+   * Fired un-awaited from the key handler, so it can overlap itself: the prologue
+   * below is the user's intent and stays immediate, while the reload it starts is
+   * discardable. `clearCaches()` is the generation bump that makes the older of
+   * two in-flight toggles land nowhere.
    */
   async toggleFileMode(): Promise<void> {
     this.fileMode = this.fileMode === FileMode.Changes ? FileMode.All : FileMode.Changes
@@ -553,18 +851,27 @@ export class App {
     }
 
     this.clearCaches()
+    const gen = this.loadGen
     // Must come before collapsing: the folders to collapse are the ones in the tree
     // we are switching TO, and loadFiles is what builds it.
     await this.loadFiles()
 
+    // The epilogue moves the cursor over `flat`, which by now may belong to a
+    // later toggle. Its own epilogue will do this for its own tree.
+    if (gen !== this.loadGen) return
     if (this.cursor >= this.flat.length) this.cursor = Math.max(0, this.flat.length - 1)
     this.syncCursorToSelection()
     this.render()
   }
 
-  /** Collapse everything, then reopen just the folders on the way to `path`. */
-  private collapseAllButPath(path: string): void {
-    const collapsed = this.collapsed
+  /**
+   * Collapse everything, then reopen just the folders on the way to `path`.
+   *
+   * The set is a parameter rather than the `collapsed` getter: the caller knows
+   * which mode's tree it just built, and the getter answers for whatever mode is
+   * active when it runs, which after an interleaved toggle is the other one.
+   */
+  private collapseAllButPath(path: string, collapsed: Set<string>): void {
     collapsed.clear()
     const walk = (nodes: Node[]): void => {
       for (const n of nodes) {
@@ -845,6 +1152,9 @@ export class App {
     // legitimately sit on a file nobody has touched, and flagging those as stale
     // would make the whole feature look broken.
     try {
+      // Same as `readAsContext`: `t.file` is repo-root-relative and only opens
+      // because the process sits at the root. From anywhere else nothing exists
+      // and every thread in the repo would be declared outdated.
       const file = Bun.file(t.file)
       if (!(await file.exists())) return true
       const data = await file.text()

@@ -16,9 +16,10 @@
  * owns each keystroke, which is the problem tmux already solves.
  */
 
+import { join } from 'node:path'
 import type { CliRenderer } from '@opentui/core'
 import type { App } from './app.ts'
-import { editorArgv, type PopupConfig } from './config.ts'
+import { editorArgv, type EditorConfig, type PopupConfig } from './config.ts'
 
 /** True when running inside a tmux session. */
 export function inTmux(): boolean {
@@ -140,8 +141,35 @@ async function runExternal(
   } finally {
     if (suspend) renderer.resume()
   }
+  // Whatever we were about to ask git for, a tool that has just had the index to
+  // itself outranks it.
+  app.stagingIntent.clear()
+  app.stagingFullIntent.clear()
   app.clearCaches()
   await app.refresh()
+}
+
+/**
+ * What to run for `e`, and what to label the window.
+ *
+ * The argv path is ABSOLUTE while the title stays repo-relative, and both halves
+ * are deliberate. Under tmux and zellij the editor is not our child — the
+ * multiplexer's server spawns it, in whatever directory it decides (usually the
+ * pane's), so it does not inherit the chdir to the repo root that makes every
+ * other path in the app work. The only thing still under our control there is the
+ * argv, so the path has to carry the root itself. The title, meanwhile, sits in a
+ * popup border where an absolute path would eat the whole width.
+ */
+export function editorInvocation(
+  editor: EditorConfig,
+  root: string,
+  path: string,
+  line: number,
+): { argv: string[]; title: string } {
+  return {
+    argv: editorArgv(editor, join(root, path), line),
+    title: line > 0 ? `${path}:${line}` : path,
+  }
 }
 
 /**
@@ -151,9 +179,12 @@ async function runExternal(
  */
 export async function openEditor(app: App, renderer: CliRenderer): Promise<void> {
   if (app.selectedPath === '') return
-  const line = app.cursorLine()
-  const argv = editorArgv(app.editor, app.selectedPath, line)
-  const title = line > 0 ? `${app.selectedPath}:${line}` : app.selectedPath
+  const { argv, title } = editorInvocation(
+    app.editor,
+    app.root,
+    app.selectedPath,
+    app.cursorLine(),
+  )
 
   if (inTmux()) {
     await runExternal(app, renderer, ['tmux', ...tmuxPopupArgs(app.popup, title), ...argv], false)

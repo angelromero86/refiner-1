@@ -14,16 +14,18 @@
 
 import { App, Focus, ModalMode, ViewMode, type ThreadModal } from './app.ts'
 import { Store } from './comments.ts'
-import type { StoredThread } from './comments.ts'
+import type { SaveReport, StoredThread } from './comments.ts'
 
 export function newThreadModal(
   threadIdx: number,
+  threadId: string,
   file: string,
   start: number,
   end: number,
 ): ThreadModal {
   return {
     threadIdx,
+    threadId,
     newThreadFile: file,
     newThreadStart: start,
     newThreadEnd: end,
@@ -38,6 +40,28 @@ export function newThreadModal(
 function openModal(app: App, modal: ThreadModal): void {
   app.modal = modal
   if (modal.mode === ModalMode.Compose) app.inputs.setComposeValue('')
+}
+
+/**
+ * threadsWritable gates the paths that mutate the store, and explains itself in
+ * the banner when it says no.
+ *
+ * The real defence is in `Store.save()` — any future caller gets it for free —
+ * but refusing up front is what makes the refusal honest: without it the
+ * reviewer types a whole comment, `save()` rejects asynchronously, and the modal
+ * drops back to browse showing a comment that exists only in memory.
+ *
+ * Synchronous and I/O-free, because it is called from key dispatch (see
+ * CLAUDE.md, "Global key handlers … only synchronously"). Reading threads is
+ * never gated: a store poisoned by `refresh()` still holds the reviewer's
+ * threads and they must stay readable.
+ */
+function threadsWritable(app: App): boolean {
+  const blocked = app.store.writeBlocked()
+  if (blocked === null) return true
+  app.err = blocked
+  app.render()
+  return false
 }
 
 export function closeModal(app: App): void {
@@ -61,9 +85,9 @@ export function openOrCreateThread(app: App): void {
   if (cursorLine > 0) {
     const existing = app.store.threadAt(app.selectedPath, cursorLine)
     if (existing) {
-      const idx = app.store.threads.findIndex((t) => t.id === existing.id)
+      const idx = app.store.indexOfThread(existing.id)
       if (idx >= 0) {
-        openModal(app, newThreadModal(idx, '', 0, 0))
+        openModal(app, newThreadModal(idx, existing.id, '', 0, 0))
         return
       }
     }
@@ -95,7 +119,10 @@ export function openOrCreateThread(app: App): void {
       break
   }
   if (start === 0) return
-  openModal(app, newThreadModal(-1, app.selectedPath, start, end))
+  // Opening an existing thread above stays allowed; only composing a new one is
+  // gated, since that is the branch that ends in a write.
+  if (!threadsWritable(app)) return
+  openModal(app, newThreadModal(-1, '', app.selectedPath, start, end))
 }
 
 /**
@@ -142,7 +169,7 @@ export function handleThreadListKey(app: App, key: string): boolean {
       // whose file left the diff are still reachable. Goto-code is `g` inside.
       const idx = app.threadList.cursor
       app.threadList = null
-      openModal(app, newThreadModal(idx, '', 0, 0))
+      openModal(app, newThreadModal(idx, threads[idx].id, '', 0, 0))
       return true
     }
     default:
@@ -230,11 +257,13 @@ export function handleModalKey(app: App, key: string): boolean {
       jumpToThread(app, t)
       return true
     case 'r':
+      if (!threadsWritable(app)) return true
       modal.mode = ModalMode.Compose
       modal.editIdx = -1
       app.inputs.setComposeValue('')
       return true
     case 'e':
+      if (!threadsWritable(app)) return true
       if (modal.selectedComment >= 0 && modal.selectedComment < t.comments.length) {
         modal.mode = ModalMode.Edit
         modal.editIdx = modal.selectedComment
@@ -243,6 +272,9 @@ export function handleModalKey(app: App, key: string): boolean {
       return true
     case 'd': {
       if (modal.selectedComment < 0 || modal.selectedComment >= t.comments.length) return true
+      // Before the mutation, not after: `deleteComment` cannot be undone from
+      // memory once the save that would have made it real has been refused.
+      if (!threadsWritable(app)) return true
       app.store.deleteComment(t.id, modal.selectedComment)
       if (t.comments.length === 0) {
         // No comments left → the thread itself is meaningless. Drop it.
@@ -256,6 +288,7 @@ export function handleModalKey(app: App, key: string): boolean {
       return true
     }
     case 'D':
+      if (!threadsWritable(app)) return true
       app.store.deleteThread(t.id)
       save(app)
       closeModal(app)
@@ -279,10 +312,25 @@ export function submitModalCompose(app: App): void {
   if (!modal) return
   const body = app.inputs.composeValue().trim()
   if (body === '') return
+  // The compose box should not have opened at all in this state, but this is the
+  // commit point and the text is still in the widget: refusing here keeps it
+  // there to be copied out, instead of moving it into a store that cannot be
+  // written and calling it saved.
+  if (!threadsWritable(app)) return
 
   if (modal.mode === ModalMode.Edit) {
     const t = app.store.threads[modal.threadIdx]
-    if (t) app.store.setCommentBody(t.id, modal.editIdx, body)
+    if (!t || modal.editIdx < 0 || modal.editIdx >= t.comments.length) {
+      // The comment went away under us — another client deleted it and a merge
+      // re-anchored past it. Say so and keep the text where the reviewer can
+      // still copy it, rather than throwing out of a key handler.
+      app.err = new Error(
+        'the comment you were editing is no longer in the file; another client deleted it',
+      )
+      app.render()
+      return
+    }
+    app.store.setCommentBody(t.id, modal.editIdx, body)
   } else if (modal.threadIdx >= 0) {
     const t = app.store.threads[modal.threadIdx]
     if (t) {
@@ -296,9 +344,10 @@ export function submitModalCompose(app: App): void {
       body,
       role: 'user',
     })
-    const idx = app.store.threads.findIndex((x) => x.id === t.id)
+    const idx = app.store.indexOfThread(t.id)
     if (idx >= 0) {
       modal.threadIdx = idx
+      modal.threadId = t.id
       modal.selectedComment = 0
     }
   }
@@ -314,18 +363,115 @@ export function submitModalCompose(app: App): void {
  * comment silently would be much worse than a visible warning.
  *
  * Fire and forget: the in-memory store is already updated, so the UI is correct
- * the moment this is called; only the disk write is still in flight.
+ * the moment this is called; only the disk write is still in flight. What is NOT
+ * settled yet is which thread lives at which index — a save that finds the file
+ * changed rebuilds `store.threads` from disk — so the ids the UI is pointing at
+ * are captured here, synchronously, and resolved back to indices afterwards.
  */
 function save(app: App): void {
+  const anchors = captureAnchors(app)
   void app.store
     .save()
-    .then(() => {
-      app.err = null
+    .then((report) => {
+      if (report.merged) reanchor(app, anchors)
+      // Only a clean save clears the banner: a merge that had to drop or
+      // overwrite something is exactly the news the reviewer must not miss.
+      app.err = mergeNotice(report)
+      if (report.merged || app.err !== null) app.render()
     })
     .catch((err: unknown) => {
       app.err = err as Error
       app.render()
     })
+}
+
+/** The ids the open overlays are pointing at, taken before a save can move them. */
+interface UiAnchors {
+  threadId: string
+  /** Id of the comment under the browse cursor, or ''. */
+  selectedId: string
+  /** Id of the comment being edited, or ''. */
+  editId: string
+}
+
+function captureAnchors(app: App): UiAnchors | null {
+  const modal = app.modal
+  if (!modal || modal.threadIdx < 0) return null
+  const t = app.store.threads[modal.threadIdx]
+  const at = (i: number): string => (t && i >= 0 && i < t.comments.length ? t.comments[i].id : '')
+  return {
+    threadId: modal.threadId,
+    selectedId: at(modal.selectedComment),
+    editId: at(modal.editIdx),
+  }
+}
+
+/**
+ * reanchor puts the overlays back onto the objects they were showing, after a
+ * merge replaced `store.threads` with the file's version of it.
+ *
+ * Indices only: everything the UI holds is an index into an array that has just
+ * been rebuilt, so each one is re-derived from the id captured before the save.
+ * A thread that is simply gone (deleted by the other client) closes the modal —
+ * showing the next thread along under the same cursor is how `d` deletes the
+ * wrong comment.
+ */
+function reanchor(app: App, anchors: UiAnchors | null): void {
+  const modal = app.modal
+  if (modal && modal.threadIdx >= 0) {
+    // The modal's OWN id, not the captured one: a save is asynchronous, and the
+    // reviewer may have closed this modal and opened another meanwhile. That one
+    // needs re-anchoring just as much, and to its own thread.
+    const idx = app.store.indexOfThread(modal.threadId)
+    const t = idx >= 0 ? app.store.threads[idx] : null
+    if (!t) {
+      closeModal(app)
+    } else {
+      modal.threadIdx = idx
+      const same = anchors !== null && anchors.threadId === modal.threadId
+      const find = (id: string): number =>
+        id === '' ? -1 : t.comments.findIndex((c) => c.id === id)
+      const last = Math.max(0, t.comments.length - 1)
+      const sel = same ? find(anchors.selectedId) : -1
+      modal.selectedComment = sel >= 0 ? sel : Math.min(Math.max(0, modal.selectedComment), last)
+      // -1 rather than a guess: submitModalCompose refuses on it and says why.
+      if (same && modal.mode === ModalMode.Edit) modal.editIdx = find(anchors.editId)
+    }
+  }
+  if (app.threadList) {
+    const n = app.store.threads.length
+    if (app.threadList.cursor >= n) app.threadList.cursor = Math.max(0, n - 1)
+  }
+}
+
+/**
+ * mergeNotice turns a save report into banner text, or null when the save was
+ * uneventful.
+ *
+ * The two things it reports are the conflicts the file format cannot represent:
+ * a reply to a thread another client had already deleted (nowhere to put it) and
+ * two edits to the same comment body (a scalar — one of them has to win). Saying
+ * so is the whole point; a merge that quietly ate one of them would be this bug
+ * again, just smaller.
+ */
+function mergeNotice(report: SaveReport): Error | null {
+  const parts: string[] = []
+  if (report.dropped > 0) {
+    parts.push(
+      report.dropped === 1
+        ? 'one edit had nowhere to go: another client had deleted that thread or comment'
+        : `${report.dropped} edits had nowhere to go: another client had deleted those threads or comments`,
+    )
+  }
+  if (report.overwritten > 0) {
+    parts.push(
+      report.overwritten === 1
+        ? 'one comment edited by another client was replaced by your version'
+        : `${report.overwritten} comments edited by another client were replaced by your version`,
+    )
+  }
+  if (parts.length === 0) return null
+  return new Error(`saved, but ${parts.join('; ')}`)
 }
 
 /** Re-export so callers don't need to reach into comments.ts for the type. */

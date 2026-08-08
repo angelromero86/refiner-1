@@ -9,7 +9,7 @@
 import { createCliRenderer } from '@opentui/core'
 import { App } from './app.ts'
 import { installKeyHandling } from './dispatch.ts'
-import { gitUserName, Mode, repoRoot, type Source } from './git.ts'
+import { enterRepoRoot, gitUserName, Mode, type Source } from './git.ts'
 import { loadConfig } from './config.ts'
 import { statePath } from './state.ts'
 import { configPath } from './theme.ts'
@@ -42,6 +42,12 @@ async function main(): Promise<void> {
     return
   }
 
+  // Everything below this line is repo-root-relative — git pathspecs, patch
+  // headers, `Bun.file()` reads, the store, the watcher. Anything argv-relative
+  // must be resolved to an absolute path ABOVE it. (`--help` stays above too, so
+  // it keeps working outside a repo.)
+  const root = await enterRepoRoot()
+
   // Must run before anything reaches into OpenTUI's asset resolution.
   configureAssetRoot()
 
@@ -55,6 +61,7 @@ async function main(): Promise<void> {
       : { mode: Mode.Uncommitted, target: '' }
 
   const app = await App.create(source)
+  app.root = root
   app.author = (await gitUserName()) || guessUser()
   app.editor = editor
   app.popup = popup
@@ -81,7 +88,7 @@ async function main(): Promise<void> {
   // After the first load, so a burst of startup events can't fight it.
   if (watch) {
     try {
-      installWatchers(app, await repoRoot())
+      installWatchers(app, root)
     } catch {
       // Not watchable: `r` still refreshes on demand.
     }

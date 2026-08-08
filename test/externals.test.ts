@@ -8,7 +8,8 @@
  * regresses silently, so it's pinned here.
  */
 import { expect, test } from 'bun:test'
-import { tmuxPopupArgs, zellijFloatingArgs } from '../src/externals.ts'
+import { editorInvocation, tmuxPopupArgs, zellijFloatingArgs } from '../src/externals.ts'
+import type { EditorConfig } from '../src/config.ts'
 
 /** Read an option's value out of an argv list. */
 function opt(argv: string[], flag: string): string | undefined {
@@ -70,4 +71,32 @@ test('width and height are centred independently', () => {
   const argv = zellijFloatingArgs({ widthPct: 100, heightPct: 50 }, 't')
   expect(opt(argv, '--x')).toBe('0%')
   expect(opt(argv, '--y')).toBe('25%')
+})
+
+/**
+ * The editor is the one place a path leaves the process into something that does
+ * NOT inherit our cwd: under tmux and zellij the multiplexer's server spawns it,
+ * from whatever directory it feels like. So the argv must be absolute even though
+ * every path inside refiner is root-relative.
+ */
+test('the editor gets an absolute path but a repo-relative title', () => {
+  const editor: EditorConfig = { command: ['nvim'], lineStyle: 'plus' }
+  const { argv, title } = editorInvocation(editor, '/repo/root', 'src/app.ts', 42)
+  expect(argv).toEqual(['nvim', '+42', '/repo/root/src/app.ts'])
+  // Relative on purpose: an absolute path in a popup border eats the whole width.
+  expect(title).toBe('src/app.ts:42')
+})
+
+test('the suffix line style keeps the line number after the absolute path', () => {
+  const editor: EditorConfig = { command: ['code', '-g'], lineStyle: 'suffix' }
+  const { argv, title } = editorInvocation(editor, '/repo/root', 'src/app.ts', 42)
+  expect(argv.at(-1)).toBe('/repo/root/src/app.ts:42')
+  expect(title).toBe('src/app.ts:42')
+})
+
+test('a deleted line has no working-tree position, so no line argument', () => {
+  const editor: EditorConfig = { command: ['nvim'], lineStyle: 'plus' }
+  const { argv, title } = editorInvocation(editor, '/repo/root', 'src/app.ts', 0)
+  expect(argv).toEqual(['nvim', '/repo/root/src/app.ts'])
+  expect(title).toBe('src/app.ts')
 })

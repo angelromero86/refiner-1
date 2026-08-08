@@ -15,6 +15,8 @@ import {
   align,
   buildPartialPatch,
   computeStagedIndices,
+  creationMode,
+  deletionMode,
   filterContentLines,
   LineKind,
   parse,
@@ -78,6 +80,207 @@ function strategies(lines: Line[]): Record<string, Set<number>> {
 test('fixture corpus is non-trivial', () => {
   expect(cases.length).toBe(14)
   expect(cases.some((c) => c.name.includes('nonl'))).toBe(true)
+})
+
+describe('creationMode', () => {
+  test('reads the mode git wrote in the header', () => {
+    const diff = [
+      'diff --git a/run.sh b/run.sh',
+      'new file mode 100755',
+      'index 0000000..4163036',
+      '--- /dev/null',
+      '+++ b/run.sh',
+      '@@ -0,0 +1,1 @@',
+      '+echo hi',
+      '',
+    ].join('\n')
+    expect(creationMode(diff)).toBe('100755')
+  })
+
+  test('is null for a modification and for a deletion', () => {
+    const mod = [
+      'diff --git a/f.txt b/f.txt',
+      'index e69de29..f0f2307 100644',
+      '--- a/f.txt',
+      '+++ b/f.txt',
+      '@@ -0,0 +1,1 @@',
+      '+x',
+      '',
+    ].join('\n')
+    expect(creationMode(mod)).toBeNull()
+
+    const del = [
+      'diff --git a/f.txt b/f.txt',
+      'deleted file mode 100644',
+      'index f0f2307..0000000',
+      '--- a/f.txt',
+      '+++ /dev/null',
+      '@@ -1,1 +0,0 @@',
+      '-x',
+      '',
+    ].join('\n')
+    expect(creationMode(del)).toBeNull()
+  })
+
+  test('ignores a body line that looks like the header', () => {
+    // Only the header block is scanned, so file content cannot fake a creation.
+    const diff = [
+      'diff --git a/f.txt b/f.txt',
+      'index e69de29..f0f2307 100644',
+      '--- a/f.txt',
+      '+++ b/f.txt',
+      '@@ -0,0 +1,1 @@',
+      '+new file mode 100755',
+      '',
+    ].join('\n')
+    expect(creationMode(diff)).toBeNull()
+  })
+
+  test('agrees with the corpus: real7 creates, the other thirteen do not', () => {
+    const creations = cases.filter((c) => creationMode(c.diff) !== null).map((c) => c.name)
+    expect(creations).toEqual(['real7.diff'])
+  })
+
+  test('the creation header is opt-in, so the golden bytes are untouched', () => {
+    // real7 IS a `new file mode` diff, and its golden patches use the classic
+    // `--- a/f.txt` form. Inferring creation from the lines would change them
+    // and force a regeneration of `diff-golden.json` — whose generator lives in
+    // the Go project, not here. Three arguments must keep meaning what they did.
+    const c = cases.find((x) => x.name === 'real7.diff')!
+    const combined = filterContentLines(parse(c.diff))
+    const include = strategies(combined).all!
+
+    const legacy = buildPartialPatch(PATCH_PATH, combined, include)
+    expect(legacy).toBe(c.patches.all!)
+    expect(legacy).toStartWith(`diff --git a/${PATCH_PATH} b/${PATCH_PATH}\n--- a/${PATCH_PATH}\n`)
+    // Explicitly passing an empty options object is the same thing again.
+    expect(buildPartialPatch(PATCH_PATH, combined, include, {})).toBe(legacy)
+    expect(buildPartialPatch(PATCH_PATH, combined, include, { createMode: null })).toBe(legacy)
+
+    const created = buildPartialPatch(PATCH_PATH, combined, include, { createMode: '100644' })
+    expect(created).not.toBe(legacy)
+    expect(created).toStartWith(
+      `diff --git a/${PATCH_PATH} b/${PATCH_PATH}\nnew file mode 100644\n--- /dev/null\n+++ b/${PATCH_PATH}\n@@ -0,0 +1,`,
+    )
+  })
+})
+
+describe('deletionMode', () => {
+  const DELETION = [
+    'diff --git a/gone.txt b/gone.txt',
+    'deleted file mode 100644',
+    'index de98044..0000000',
+    '--- a/gone.txt',
+    '+++ /dev/null',
+    '@@ -1,3 +0,0 @@',
+    '-a',
+    '-b',
+    '-c',
+    '',
+  ].join('\n')
+
+  test('reads the mode git wrote in the header', () => {
+    expect(deletionMode(DELETION)).toBe('100644')
+    expect(deletionMode(DELETION.replace('100644', '100755'))).toBe('100755')
+    // A symlink is the case a hard-coded 100644 fails outright on.
+    expect(deletionMode(DELETION.replace('100644', '120000'))).toBe('120000')
+  })
+
+  test('is null for a modification and for a creation', () => {
+    expect(deletionMode(creationDiff())).toBeNull()
+    expect(deletionMode(truncationDiff())).toBeNull()
+    // And the two readers never both answer for the same diff.
+    expect(creationMode(DELETION)).toBeNull()
+  })
+
+  test('ignores a body line that looks like the header', () => {
+    const diff = truncationDiff().replace('-r1', '-deleted file mode 100755')
+    expect(deletionMode(diff)).toBeNull()
+  })
+
+  test('agrees with the corpus: none of the fourteen is a deletion', () => {
+    // The point of the whole design. `alldel.txt.diff` LOOKS like a deletion —
+    // three Del lines, `@@ -1,3 +0,0 @@`, nothing left on the new side — but its
+    // header says `index 74c047b..e69de29 100644`, i.e. a file truncated to zero
+    // bytes. Only the header can tell the two apart.
+    expect(cases.filter((c) => deletionMode(c.diff) !== null).map((c) => c.name)).toEqual([])
+    const alldel = cases.find((c) => c.name === 'alldel.txt.diff')!
+    expect(alldel.diff).toContain('index 74c047b..e69de29 100644')
+    expect(alldel.diff).not.toContain('deleted file mode')
+  })
+
+  test('the deletion header is opt-in, so the golden bytes are untouched', () => {
+    // The sibling of the creation test above, on the fixture that would move if
+    // the fix ever became inferential. `all` and `dels` select every Del in
+    // `alldel.txt.diff`, so `newCount === 0` — the exact shape a naive fix would
+    // rewrite. They must keep saying `+++ b/f.txt`.
+    const c = cases.find((x) => x.name === 'alldel.txt.diff')!
+    const combined = filterContentLines(parse(c.diff))
+    const strats = strategies(combined)
+
+    for (const name of ['all', 'dels'] as const) {
+      const legacy = buildPartialPatch(PATCH_PATH, combined, strats[name]!)
+      expect(legacy, name).toBe(c.patches[name]!)
+      expect(legacy, name).toContain(`+++ b/${PATCH_PATH}\n`)
+      expect(legacy, name).not.toContain('deleted file mode')
+      // Explicitly saying "not a deletion" is the same thing again.
+      expect(buildPartialPatch(PATCH_PATH, combined, strats[name]!, {}), name).toBe(legacy)
+      expect(
+        buildPartialPatch(PATCH_PATH, combined, strats[name]!, { deleteMode: null }),
+        name,
+      ).toBe(legacy)
+    }
+
+    const deleted = buildPartialPatch(PATCH_PATH, combined, strats.all!, { deleteMode: '100644' })
+    expect(deleted).toBe(
+      `diff --git a/${PATCH_PATH} b/${PATCH_PATH}\n` +
+        `deleted file mode 100644\n` +
+        `--- a/${PATCH_PATH}\n` +
+        `+++ /dev/null\n` +
+        `@@ -1,3 +0,0 @@\n-r1\n-r2\n-r3\n`,
+    )
+  })
+
+  test('a partial selection over a deletion keeps the modification header', () => {
+    // `newCount === 0` is what gates the new branch, and a partial selection
+    // leaves the unselected dels as context — so the file shrinks in the index
+    // rather than leaving it, even with the mode in hand.
+    const combined = filterContentLines(parse(DELETION))
+    const partial = buildPartialPatch('gone.txt', combined, new Set([0, 1]), {
+      deleteMode: '100644',
+    })
+    expect(partial).not.toContain('deleted file mode')
+    expect(partial).toContain('+++ b/gone.txt\n')
+    expect(partial).toContain('@@ -1,3 +1,1 @@\n')
+  })
+
+  test('a deleted file with no trailing newline keeps exactly one marker', () => {
+    // Only the old side has lines, so only HEAD's marker may be emitted.
+    const combined = filterContentLines(parse(DELETION))
+    combined[combined.length - 1]!.noNewline = true
+    const patch = buildPartialPatch('gone.txt', combined, new Set([0, 1, 2]), {
+      deleteMode: '100644',
+    })
+    expect(patch).toEndWith('-c\n\\ No newline at end of file\n')
+    expect(patch.split('\\ No newline at end of file')).toHaveLength(2)
+  })
+
+  function creationDiff(): string {
+    return [
+      'diff --git a/f.txt b/f.txt',
+      'new file mode 100644',
+      'index 0000000..f0f2307',
+      '--- /dev/null',
+      '+++ b/f.txt',
+      '@@ -0,0 +1,1 @@',
+      '+x',
+      '',
+    ].join('\n')
+  }
+
+  function truncationDiff(): string {
+    return cases.find((c) => c.name === 'alldel.txt.diff')!.diff
+  }
 })
 
 describe.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {

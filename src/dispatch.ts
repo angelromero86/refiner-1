@@ -38,6 +38,11 @@ export function installKeyHandling(app: App, renderer: CliRenderer): void {
     // during this dispatch, and anything we don't claim has to reach the focused
     // text widget untouched. Handlers therefore kick off their git/store I/O
     // without awaiting it.
+    //
+    // "Without awaiting" is not the same as "fire and forget": staging used to be
+    // launched blind with `void`, and two presses inside one operation raced over
+    // the index and lost a line. `staging.ts` now decides here, synchronously, and
+    // hands the git work to a serial queue. Don't put the `void` back.
     if (route(app, renderer, key)) {
       event.preventDefault()
       app.render()
@@ -190,6 +195,13 @@ function handleTreeKey(app: App, key: string): boolean {
   if (key === 'tab') {
     // Contextual: in the tree Tab switches WHAT is listed, in the diff it
     // switches HOW the file is shown.
+    //
+    // `void` is correct here and must stay: the mode flips synchronously inside
+    // `toggleFileMode`, and the reload it starts carries a generation
+    // (`App.loadGen`) so the older of two in-flight toggles cannot land. Making
+    // this handler `async` to await it would move `preventDefault()` past the
+    // dispatch — see the header of this file. Unlike `space`, this is a read:
+    // discarding the stale result is the fix, not a queue.
     void app.toggleFileMode()
     return true
   }
@@ -210,7 +222,7 @@ function handleTreeKey(app: App, key: string): boolean {
       return true
     case ' ': {
       const node = app.flat[app.cursor]?.node
-      if (node?.type === 'file') void toggleFullStage(app, node.file)
+      if (node?.type === 'file') toggleFullStage(app, node.file)
       return true
     }
     default:
@@ -315,7 +327,7 @@ function handleContentKey(app: App, renderer: CliRenderer, key: string): boolean
       app.selectionAnchor = -1
       break
     case ' ':
-      void toggleStaged(app)
+      toggleStaged(app)
       return true
     case 'enter':
       openOrCreateThread(app)

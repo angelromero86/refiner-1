@@ -356,10 +356,13 @@ Y al revés: **refiner se recarga solo**. Vigila `.refiner/` y `.git/`, así que
 un agente responde a un thread, o haces `git add` en otra terminal, lo ves aparecer
 sin pulsar nada. Conserva dónde estabas — fichero abierto, línea, selección y foco.
 
-Lo que **no** vigila es el working tree: hacerlo obliga a un watch recursivo de todo
-el repo, y `r` ya cubre ese caso a demanda. En la práctica apenas se nota, porque un
-agente que toca código también contesta en su thread, y esa escritura sí está
-vigilada.
+Vigila también **el working tree**, así que si un agente edita código el diff se
+actualiza solo. Eso necesita un watch recursivo, y para que un `bun install` no
+provoque una tormenta de recargas, qué rutas ignorar **lo decide git**
+(`git ls-files --others --directory --ignored`) en vez de una lista negra escrita a
+mano: se respeta tu `.gitignore` tal cual. La lista se calcula al arrancar, así que un
+directorio que pase a estar ignorado más tarde no se filtra hasta el siguiente
+lanzamiento.
 
 Mientras tengas un modal abierto no se refresca por debajo — sería hostil recargar a
 media redacción de un comentario, y los índices que sostiene el modal podrían moverse.

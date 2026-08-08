@@ -25,13 +25,120 @@ back via `currentIdx`. Mixing them silently stages the wrong lines.
 
 **Staging is reset-then-apply.** The patch describes the COMPLETE desired staged
 set against HEAD, never a delta — `src/staging.ts` resets the file's index entry
-first. That is what keeps repeated partial stages from drifting.
+first. That is what keeps repeated partial stages from drifting. For a file with
+no blob in HEAD the reset REMOVES the entry, and that is a precondition, not a
+convenience: `git apply --cached` rejects a `new file mode` patch with `already
+exists in index` when the entry is still there.
+
+**The patch header's shape comes from git, never from the lines.** A file absent
+from HEAD needs `new file mode <mode>` · `--- /dev/null`; the classic
+`--- a/<path>` fails it with `does not exist in index`. `buildPartialPatch`
+cannot work that out for itself — a file whose HEAD blob is EMPTY produces a
+byte-identical filtered `Line[]` (all Add) and needs the opposite header — so the
+verdict is read off git's own header by `creationMode()` before
+`filterContentLines` discards it, cached as `RenderedDiff.createMode` and handed
+back in `buildPartialPatch`'s optional `PatchHeader`. Two rules there: the
+argument is opt-in, because omitting it must stay byte-identical to the Go
+fixtures in `test/diff.test.ts` (`real7.diff` IS a creation whose golden patches
+use the classic form, and the generator lives in the Go project); and the mode is
+copied, never hard-coded, or an executable silently loses its `+x` bit.
+
+The deletion end is the same rule mirrored, and it bites harder because it fails
+QUIETLY: a file gone from the working tree whose every line is selected needs
+`deleted file mode <mode>` · `+++ /dev/null`, and without it git accepts
+`+++ b/<path>` with `+1,0`, exits 0, and leaves the EMPTY blob in the index — so
+the commit writes an empty file where the user asked for none. Here too the lines
+cannot decide: TRUNCATING a file to zero bytes yields a byte-identical filtered
+`Line[]` (all Del, same `@@ -1,N +0,0 @@`) and must keep the classic header — the
+golden fixture `alldel.txt.diff` is exactly that case, so an inferential fix
+would move it. `deletionMode()` reads the verdict, `RenderedDiff.deleteMode`
+caches it, and `newCount === 0` gates it so a PARTIAL selection over a deleted
+file stays an ordinary modification. Dropping `deleted file mode` while keeping
+`+++ /dev/null` is not a lighter version of the fix: git then also writes a bogus
+`dev/null` entry. And the mode matters more than on the creation side — a symlink
+announced as `100644` is rejected outright with `wrong type`.
+
+**Staging is queued, and decided synchronously.** One operation takes ~21 ms;
+autorepeat is ~30 ms. `toggleStaged`/`toggleFullStage` therefore resolve the
+cursor, decide the direction and record the result in `app.stagingIntent`
+*during* the key dispatch, then hand a job to a serial queue — never `void`
+straight at git. Two operations in flight interleave `unstage₁, unstage₂,
+apply₂, apply₁` and lose a line. Two decisions from `app.staged` — git's answer
+to the previous press, a reload behind — do the same thing silently, because
+the second one's complete-desired-set patch describes the first one's line as
+unstaged. Read the staged set through `app.stagedFor(path)` (intent, then git)
+and never re-derive it from `app.staged`. Coalescing pending jobs by path is
+only safe because of the invariant above.
+
+**refiner always runs from the repo root.** `main()` calls `enterRepoRoot()`
+(`src/git.ts`) before anything touches the repo, and everything downstream assumes
+it. Domain paths — `ChangedFile.path`, `StoredThread.file`, the headers inside the
+patch fed to `git apply --cached` — are root-relative and never absolute; making
+them absolute would break the patch, the `app.cache` keys and the store contract
+with the VSCode extension all at once. git's pathspecs and `Bun.file()` resolve
+against the cwd instead, and git answers a pathspec that matches nothing with exit
+0 and no output, so from a subdirectory every diff comes out blank and staging
+quietly does nothing. At the edge of a child process that does NOT inherit our cwd
+— the tmux/zellij editor popup — compose the absolute path right there, from
+`app.root`. `test/subdir.test.ts` runs the real pipeline from a subdirectory.
+
+**A `ChangedFile` is exactly one path.** The tree splits `path` on `/`, `app.cache`
+and `app.staged` key on it, `stageFile`/`unstageFile` hand it to git as a pathspec
+and `buildPartialPatch` writes it into the patch header. A rename is the one thing
+git reports over two paths, so both queries in `loadChangedFiles` pass
+`--no-renames` and the pair arrives as an ordinary `D` plus an ordinary `A`. Drop
+the flag from either one — porcelain and `--name-status` are parsed by different
+functions — and `RM old -> new` comes back as the literal path `"old -> new"`:
+blank diff, `fatal: pathspec` on stage, a silent no-op on unstage (`git reset`
+exits 0 on an unmatched pathspec), and a phantom `src/a.ts -> src` directory.
+Nothing is lost in the panel, because `loadDiff` restricts the diff to one path and
+git therefore never emits rename headers anyway. `test/renames.test.ts` pins it.
 
 **`.refiner/comments.json` is shared** with the Refiner VSCode extension and with
-agents. Preserve fields you don't understand (notably `anchor`, which the extension
-maintains for drift tracking) and keep the serialization at
-`JSON.stringify(data, null, 2) + '\n'` so the two tools don't fight over whitespace.
-`test/comments.test.ts` guards both.
+agents. Preserve fields you don't understand — `anchor`, which the extension
+maintains for drift tracking, unknown keys inside a thread, and unknown keys at the
+ROOT — and keep the serialization at `JSON.stringify(data, null, 2) + '\n'` so the
+two tools don't fight over whitespace. That is why parsed objects are mutated in
+place and never rebuilt field by field, the root object included.
+`test/comments.test.ts` guards all of it.
+
+Because every save rewrites the whole file, **a `Store` that never managed to read
+its file never writes it**. `Store.load()` throws on malformed JSON, and that only
+protects anyone if the caller stops there — an empty-but-writable fallback store
+was how a half-written file from the extension, or an agent killed mid-write,
+became a file with one thread in it. So the rule lives in the store, not in its
+callers: `loadOrReadOnly()` marks the fallback, `markUnreadable()` poisons a store
+whose file broke under it, and `save()` rejects before touching `lastSyncedText`
+(a value describing a write that never happened would make the watcher mistake the
+real file for our own echo). A missing or empty file is an ordinary new repo and
+stays writable. Recovery is a successful `load()` — nothing un-poisons a store.
+The header, not the error banner, carries the read-only state: the banner replaces
+the whole tree pane and `r` clears it, so a latched warning was one keystroke from
+being dismissed while the store was still unwritable.
+
+**We are never the only writer, and the dangerous window is the whole session.**
+An agent replying while the reviewer composes used to be erased by that comment: a
+save wrote a copy of the file read at startup. So `save()` re-reads first, and when
+the bytes moved since `lastSyncedText` it replays the local mutation log onto the
+DISK copy instead of overwriting it. Three things hold that up. The log is keyed by
+**id, never index** — an index means nothing after somebody else's insert, which is
+also why `Store` resolves the caller's comment index to an id at mutation time.
+Saves are serialized through `writeChain`, because `threads-ui.ts` fires them with
+`void` and two merges onto the same base clobber each other. And unparseable bytes
+are still a refusal, not a base: that is the same `markUnreadable()` poison, so the
+merge can never flatten a write in progress. Conflicts the format cannot express —
+a reply to a thread the other client deleted, an edit to a comment they also
+edited — are counted in the `SaveReport` and reach the banner; silence there would
+be this bug again in miniature.
+
+Two consequences elsewhere. **The modal is re-anchored by id after a merge**
+(`ThreadModal.threadId`): its `threadIdx` indexes an array the merge has just
+rebuilt, and `d`/`D` read the thread straight out of it, so a stale index deletes
+somebody else's thread. And **the file is replaced by rename, not truncated** —
+`Bun.write()` over an existing path truncates in place, which serves concurrent
+readers a half-written file, i.e. manufactures the unreadable-store case above for
+the process next door. The watcher watches the `.refiner/` directory, not the file,
+partly for that reason; it ignores the `comments.json.<pid>.<n>.tmp` we rename from.
 
 ## OpenTUI specifics that bit us
 
@@ -40,6 +147,19 @@ maintains for drift tracking) and keep the serialization at
   fires git/store I/O without awaiting. Making a handler `async` means
   `preventDefault()` lands after dispatch, and keys leak into (or never reach) the
   focused text widget.
+- **Loads carry a generation, so a keypress can start one without awaiting it.**
+  `App.loadGen` is bumped synchronously by `clearCaches()` — the only bumper —
+  and every async load captures it on its first line and writes nothing shared
+  once it is no longer current. Two `tab` presses inside git's latency used to
+  leave the header saying CHANGES while the tree listed the whole repo, because
+  `loadAllFiles` runs two git commands to `loadChangedFiles`' one and therefore
+  landed last. A stale load must not set `err`, must not consume
+  `pendingNavLine`, and must not refill a cache that was just dropped. The
+  precondition is bump-then-load: every bump is immediately followed by a load
+  that repopulates the screen, which is why `onResize` — reachable with nothing
+  selected — clears `cache` by hand instead. Note this is the opposite treatment
+  to staging above, on purpose: a reload is a read, where the newest intent
+  invalidates the older one, while a dropped staging press loses work.
 - **Focusing a hidden renderable is a silent no-op.** Widget focus is derived from
   state in `View.syncWidgetFocus()`, after visibility is settled for the frame.
   Don't call `focus()` from the app layer.
