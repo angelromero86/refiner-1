@@ -158,9 +158,10 @@ function collapsedFor(app: App, mode: FileMode): string[] {
 }
 
 /**
- * What the header claims and what the tree shows, in one assertion — the header
- * composes `fileModeLabel(app.fileMode)` and `${app.files.length} files` from
- * two different places (`src/view.ts`), and the bug is exactly them disagreeing.
+ * What the labels claim and what the tree shows, in one assertion — the tree's
+ * title composes `fileModeLabel(app.fileMode)` while the header counts
+ * `${app.files.length} files` (both in `src/view.ts`, from two different pieces
+ * of state), and the bug is exactly them disagreeing.
  */
 function expectHeaderAgreesWithTree(app: App): void {
   const expected = app.fileMode === FileMode.All ? ALL_FILES : CHANGES_FILES

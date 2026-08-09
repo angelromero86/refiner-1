@@ -56,6 +56,25 @@ function rowsToStyledText(rows: TextChunk[][]): StyledText {
   return new StyledText(out.length > 0 ? out : [EMPTY])
 }
 
+/** The rule between the panes, and the padding a pane spends on each side. */
+const RULE_W = 1
+const PANE_PAD_W = 2
+
+/**
+ * The rules, drawn as one family: the same light box-drawing lines the diff
+ * already uses between its line numbers and its code, in the same muted tone,
+ * meeting in a `┬` under the header.
+ *
+ * They are static. An earlier pass had the vertical rule lean toward whichever
+ * pane held the focus, which made a permanent piece of furniture move on every
+ * `←`/`→` — the focus is on the pane titles and the cursor row, where it belongs.
+ */
+const RULE_V = '│'
+const RULE_H = '─'
+/** Where the header's rule opens the divide, and where the titles' rule crosses it. */
+const RULE_TEE = '┬'
+const RULE_CROSS = '┼'
+
 /** Border (2) + vertical padding (2) around an overlay's content rows. */
 const OVERLAY_CHROME_H = 4
 /** Rows the compose textarea occupies. */
@@ -66,8 +85,18 @@ export class View {
   private renderer: CliRenderer
 
   private headerText!: TextRenderable
+  private hRuleText!: TextRenderable
+  private subRuleText!: TextRenderable
+  private titleRow!: BoxRenderable
+  private treeTitleBox!: BoxRenderable
+  private treeTitleText!: TextRenderable
+  private contentTitleText!: TextRenderable
+  private ruleTitleBox!: BoxRenderable
+  private ruleTitleText!: TextRenderable
   private treeBox!: BoxRenderable
   private treeText!: TextRenderable
+  private ruleBox!: BoxRenderable
+  private ruleText!: TextRenderable
   private contentBox!: BoxRenderable
   private contentText!: TextRenderable
 
@@ -130,27 +159,66 @@ export class View {
     const root = this.renderer.root
     root.flexDirection = 'column'
 
+    // No box around the header: a border would spend two more rows restating
+    // what the row inside it already says. Same for the panes below — the whole
+    // frame is one header row, one title row and one column of rule.
     const headerBox = new BoxRenderable(ctx, {
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: S.palette.primary,
       paddingLeft: 1,
       paddingRight: 1,
-      height: 3,
+      height: 1,
       flexShrink: 0,
     })
     this.headerText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     headerBox.add(this.headerText)
 
+    // Both horizontal rules run the full width — no padding — so they meet the
+    // vertical one below them on its own column instead of stopping short of it.
+    const hRuleBox = new BoxRenderable(ctx, { height: 1, flexShrink: 0 })
+    this.hRuleText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    hRuleBox.add(this.hRuleText)
+
+    const subRuleBox = new BoxRenderable(ctx, { height: 1, flexShrink: 0 })
+    this.subRuleText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    subRuleBox.add(this.subRuleText)
+
+    // The title row is laid out as a flex row of the same three widths as the
+    // panes underneath, so each title sits over its own pane without anyone
+    // doing the column arithmetic by hand.
+    this.titleRow = new BoxRenderable(ctx, {
+      flexDirection: 'row',
+      height: 1,
+      flexShrink: 0,
+    })
+    this.treeTitleBox = new BoxRenderable(ctx, {
+      paddingLeft: 1,
+      paddingRight: 1,
+      flexShrink: 0,
+    })
+    this.treeTitleText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.treeTitleBox.add(this.treeTitleText)
+
+    this.ruleTitleBox = new BoxRenderable(ctx, { width: RULE_W, flexShrink: 0 })
+    this.ruleTitleText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.ruleTitleBox.add(this.ruleTitleText)
+
+    const contentTitleBox = new BoxRenderable(ctx, {
+      paddingLeft: 1,
+      paddingRight: 1,
+      flexGrow: 1,
+    })
+    this.contentTitleText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    contentTitleBox.add(this.contentTitleText)
+
+    this.titleRow.add(this.treeTitleBox)
+    this.titleRow.add(this.ruleTitleBox)
+    this.titleRow.add(contentTitleBox)
+
     const middle = new BoxRenderable(ctx, { flexDirection: 'row', flexGrow: 1 })
 
     this.treeBox = new BoxRenderable(ctx, {
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: S.palette.muted,
       // Opaque on purpose. A transparent cell emits no background change, so the
       // terminal keeps whatever the previous cell set — which let a highlighted
-      // cursor row bleed across the pane border and tint the whole diff row next
+      // cursor row bleed across the pane divide and tint the whole diff row next
       // to it. Painting the panes gives every cell an explicit background.
       backgroundColor: S.palette.background,
       paddingLeft: 1,
@@ -160,10 +228,17 @@ export class View {
     this.treeText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.treeBox.add(this.treeText)
 
+    // The divide between the panes, one column wide. It replaces four columns of
+    // facing borders and, unlike them, says which side has the focus.
+    this.ruleBox = new BoxRenderable(ctx, {
+      width: RULE_W,
+      backgroundColor: S.palette.background,
+      flexShrink: 0,
+    })
+    this.ruleText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.ruleBox.add(this.ruleText)
+
     this.contentBox = new BoxRenderable(ctx, {
-      border: true,
-      borderStyle: 'rounded',
-      borderColor: S.palette.muted,
       backgroundColor: S.palette.background,
       paddingLeft: 1,
       paddingRight: 1,
@@ -173,9 +248,13 @@ export class View {
     this.contentBox.add(this.contentText)
 
     middle.add(this.treeBox)
+    middle.add(this.ruleBox)
     middle.add(this.contentBox)
 
     root.add(headerBox)
+    root.add(hRuleBox)
+    root.add(this.titleRow)
+    root.add(subRuleBox)
     root.add(middle)
 
     // ---- overlays -------------------------------------------------------
@@ -281,14 +360,13 @@ export class View {
 
   private renderHeader(): void {
     const app = this.app
+    // The file-list mode and the view mode used to ride here too. They moved
+    // down to the title of the pane each one actually describes, which leaves
+    // this row holding only what is true of the session as a whole.
     const left: TextChunk[] = [
       chunk(app.repoName, S.appName),
       chunk(' · ', S.dim),
       chunk(app.modeLabel(), S.mode),
-      chunk(' · ', S.dim),
-      chunk(fileModeLabel(app.fileMode), S.mode),
-      chunk(' · ', S.dim),
-      chunk(viewModeLabel(app.effectiveViewMode()), { ...S.hotkey, bold: true }),
     ]
     // Counts threads, and now says so. This used to read "N comments" while
     // counting threads — exactly the confusion this pass removes.
@@ -315,8 +393,8 @@ export class View {
       chunk(' keys', S.dim),
     )
 
-    // The border sits outside the box width; the padding is inside it.
-    const contentW = Math.max(1, app.width - 4)
+    // Only the header's own left/right padding is inside the row.
+    const contentW = Math.max(1, app.width - PANE_PAD_W)
     const gap = Math.max(1, contentW - chunksWidth(left) - chunksWidth(right))
     this.headerText.content = new StyledText(
       clampRow([...left, chunk(' '.repeat(gap)), ...right], contentW),
@@ -326,31 +404,96 @@ export class View {
   private renderMiddle(): void {
     const app = this.app
     const innerH = app.paneInnerHeight()
+    const showTree = !app.treeHidden()
+    const treeFocused = app.focus === Focus.Tree
 
-    this.treeBox.visible = !app.treeHidden()
-    if (this.treeBox.visible) {
+    // A hidden tree takes its title and the rule with it, and the diff pane's
+    // flexGrow claims the whole width.
+    this.treeBox.visible = showTree
+    this.treeTitleBox.visible = showTree
+    this.ruleBox.visible = showTree
+    this.ruleTitleBox.visible = showTree
+
+    if (showTree) {
       const treeW = app.treePanelWidth()
+      const treeInnerW = Math.max(1, treeW - PANE_PAD_W)
       this.treeBox.width = treeW
-      this.treeBox.borderColor = app.focus === Focus.Tree ? S.palette.focus : S.palette.muted
-      // Position readouts ride the bottom border, where they cost no rows. This
-      // is what the removed footer used to show on its right-hand side.
-      this.treeBox.bottomTitle =
-        app.flat.length > 0 ? ` ${app.cursor + 1}/${app.flat.length} ` : undefined
-      this.treeBox.bottomTitleAlignment = 'right'
-      this.treeText.content = this.buildTree(Math.max(1, treeW - 4), innerH)
+      this.treeTitleBox.width = treeW
+      // The tree's title is the one piece of state that belongs to it: which
+      // list `tab` is showing, CHANGES or ALL.
+      this.treeTitleText.content = rowsToStyledText([
+        clampRow(
+          [chunk(fileModeLabel(app.fileMode), treeFocused ? S.paneTitleFocus : S.paneTitle)],
+          treeInnerW,
+        ),
+      ])
+      this.treeText.content = this.buildTree(treeInnerW, innerH)
+
+      this.ruleTitleText.content = rowsToStyledText([[chunk(RULE_V, S.paneRule)]])
+      this.ruleText.content = rowsToStyledText(
+        Array.from({ length: innerH }, () => [chunk(RULE_V, S.paneRule)]),
+      )
     }
 
-    const contentFocused = app.focus === Focus.Content
-    this.contentBox.borderColor = contentFocused ? S.palette.focus : S.palette.muted
-    // The Go version hand-drew a top border with the path spliced into it;
-    // `title` does exactly that natively.
-    this.contentBox.title = app.selectedPath === '' ? undefined : ` ${app.selectedPath} `
-    this.contentBox.titleColor = contentFocused ? S.palette.focus : S.palette.muted
-    this.contentBox.bottomTitle =
-      app.selectedPath === '' ? undefined : ` ${app.contentLineLabel()} `
-    this.contentBox.bottomTitleAlignment = 'right'
+    // Under the header, a `┬` opening the divide between the panes. Under the
+    // titles, the divide simply carries on through a lighter rule — the pane
+    // rules cross it rather than meet it, so the strong line stays continuous
+    // from the junction all the way to the bottom of the screen.
+    this.hRuleText.content = this.buildRuleRow(RULE_TEE, S.paneRule, S.paneRule)
+    this.subRuleText.content = this.buildRuleRow(RULE_CROSS, S.paneRuleSoft, S.paneRule)
 
-    this.contentText.content = this.buildContent(Math.max(1, app.diffPanelWidth() - 4), innerH)
+    const contentInnerW = Math.max(1, app.diffPanelWidth() - PANE_PAD_W)
+    this.contentTitleText.content = this.buildContentTitle(contentInnerW)
+    this.contentText.content = this.buildContent(contentInnerW, innerH)
+  }
+
+  /**
+   * One full-width horizontal rule, with `junction` sitting on the exact column
+   * the vertical rule occupies.
+   *
+   * Drawn from `treePanelWidth()` rather than from the panes' own boxes: it
+   * spans them both, so it can't be assembled out of their widths, and it must
+   * land the junction on the column the rule between them will use.
+   */
+  private buildRuleRow(junction: string, fill: Style, junctionStyle: Style): StyledText {
+    const app = this.app
+    if (app.treeHidden()) {
+      return rowsToStyledText([[chunk(RULE_H.repeat(Math.max(0, app.width)), fill)]])
+    }
+    const treeW = app.treePanelWidth()
+    const tail = Math.max(0, app.width - treeW - RULE_W)
+    return rowsToStyledText([
+      [
+        chunk(RULE_H.repeat(treeW), fill),
+        chunk(junction, junctionStyle),
+        chunk(RULE_H.repeat(tail), fill),
+      ],
+    ])
+  }
+
+  /**
+   * The diff pane's title row: the path on the left, and on the right what the
+   * pane's borders used to carry — the view mode and the line readout.
+   *
+   * The view mode shows even with no file selected. `tab` is what cycles it, and
+   * with the header no longer naming it this row is the only thing that does.
+   */
+  private buildContentTitle(w: number): StyledText {
+    const app = this.app
+    const focused = app.focus === Focus.Content
+
+    const right: TextChunk[] = [
+      chunk(viewModeLabel(app.effectiveViewMode()), { ...S.hotkey, bold: true }),
+    ]
+    if (app.selectedPath !== '') {
+      right.push(chunk(' · ', S.dim), chunk(app.contentLineLabel(), S.dim))
+    }
+    const left: TextChunk[] =
+      app.selectedPath === ''
+        ? []
+        : [chunk(app.selectedPath, focused ? S.paneTitleFocus : S.paneTitle)]
+
+    return rowsToStyledText([pinRight(left, right, w)])
   }
 
   // -------------------------------------------------------------------- tree
@@ -392,9 +535,12 @@ export class View {
    */
   private buildTreeRow(item: FlatNode, isCursor: boolean, w: number): TextChunk[] {
     const app = this.app
-    // The cursor highlight shows only while the tree has focus.
-    const cursorHere = isCursor && app.focus === Focus.Tree
-    const bg = S.palette.cursorBg
+    // The cursor row is painted whether or not the tree has focus, at the idle
+    // weight when it doesn't. It used to vanish entirely, which was survivable
+    // while a lit border said "this pane is asleep" — without one, the pane just
+    // lost the one thing the reader needs on the way back: where they were.
+    const cursorHere = isCursor
+    const bg = app.focus === Focus.Tree ? S.palette.cursorBg : S.palette.cursorBgIdle
     // On the cursor row every segment carries the highlight, including the gaps.
     const padStyle: Style | undefined = cursorHere ? { bg } : undefined
     const guideStyle = cursorHere ? { bg } : S.treeGuide
@@ -458,8 +604,11 @@ export class View {
     const cached = app.cache.get(app.selectedPath)
     if (!cached) return rowsToStyledText([[chunk('Loading…', S.dim)]])
 
-    // The last column belongs to the scrollbar; diff rows get what's left.
-    const contentW = Math.max(1, w - 1)
+    // The scrollbar's column is reserved only when there is something to scroll.
+    // A diff that fits on screen has nothing to say with it — its change bands
+    // are all visible as the diff itself — so the column goes back to the code.
+    const needsScrollbar = app.activeRowCount() > h
+    const contentW = needsScrollbar ? Math.max(1, w - 1) : w
     const focused = app.focus === Focus.Content
     const [selStart, selEnd] = app.selectionRange()
     // Intent first, git second: a keypress repaints as staged in the same frame
@@ -550,8 +699,10 @@ export class View {
     }
     while (rows.length < h) rows.push([chunk(' '.repeat(contentW))])
 
-    const scrollbar = this.buildScrollbar(h)
-    for (let i = 0; i < h; i++) rows[i].push(scrollbar[i])
+    if (needsScrollbar) {
+      const scrollbar = this.buildScrollbar(h)
+      for (let i = 0; i < h; i++) rows[i].push(scrollbar[i])
+    }
 
     return rowsToStyledText(rows)
   }

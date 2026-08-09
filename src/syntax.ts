@@ -30,6 +30,20 @@ export interface Run {
   group: string
 }
 
+/**
+ * Captures that say something about the text rather than how to color it.
+ *
+ * nvim-treesitter's queries — which is where these come from — carry editor
+ * features we don't implement: `spell`/`nospell` mark regions for the spell
+ * checker, `conceal` marks delimiters an editor would hide, `none` explicitly
+ * asks for no highlight. They are emitted AFTER the visual capture covering the
+ * same span, and the painter lets the last one win, so leaving them in meant a
+ * markdown code span was captured as `markup.raw` and then immediately buried
+ * under `nospell` — a group no theme maps, so it rendered as plain text. This is
+ * most of why markdown looked unhighlighted.
+ */
+const NON_VISUAL_GROUPS = new Set(['spell', 'nospell', 'conceal', 'none'])
+
 /** 1-based line number → the runs on that line, left to right, non-overlapping. */
 export type LineRuns = Map<number, Run[]>
 
@@ -43,14 +57,32 @@ export interface DiffHighlights {
 export const NO_HIGHLIGHTS: DiffHighlights = { new: new Map(), old: new Map() }
 
 /**
- * Parsers bundled with @opentui/core. Anything outside this list simply doesn't
- * get highlighted — OpenTUI can fetch more parsers, but that means a network
- * round trip, which a git TUI has no business doing on its own.
+ * Grammars we ship ourselves, under `assets/parsers/<filetype>/`.
+ *
+ * @opentui/core bundles four (typescript, javascript, markdown, zig) and no
+ * more. The rest are vendored — see `scripts/fetch-parsers.ts` for where each
+ * one comes from — and registered at startup with `addFiletypeParser`, which
+ * takes local paths, so nothing is fetched at runtime.
+ *
+ * Adding one is: put it in `SOURCES` there, add the name here, and map its
+ * extensions in `FILETYPES`. `test/syntax.test.ts` fails if the three disagree.
+ */
+export const VENDORED_FILETYPES = ['json', 'toml', 'css', 'scss', 'html', 'xml'] as const
+
+/** Directory holding them, under `assets/` in the repo and in the sidecar. */
+export const PARSER_DIR_NAME = 'parsers'
+
+/**
+ * Extension → parser. Anything unlisted renders in flat diff colors, which is
+ * also what happens when a parser fails to load: highlighting is best-effort.
  */
 const FILETYPES: Record<string, string> = {
   ts: 'typescript',
   mts: 'typescript',
   cts: 'typescript',
+  // No `tsx` grammar is bundled, and the plain TypeScript one is error-tolerant
+  // enough to still color most of a component. JSX regions come out worse than
+  // the rest; that is the trade, not a bug to chase.
   tsx: 'typescript',
   js: 'javascript',
   mjs: 'javascript',
@@ -59,6 +91,16 @@ const FILETYPES: Record<string, string> = {
   md: 'markdown',
   markdown: 'markdown',
   zig: 'zig',
+
+  json: 'json',
+  toml: 'toml',
+  css: 'css',
+  scss: 'scss',
+  html: 'html',
+  htm: 'html',
+  xml: 'xml',
+  // An SVG is XML, and reviewing one is mostly reading its attributes.
+  svg: 'xml',
 }
 
 /** filetypeFor maps a path to a bundled parser name, or null if unsupported. */
@@ -126,13 +168,48 @@ export const RUNTIME_ASSETS: readonly string[] = [
   '@opentui/core/assets',
 ]
 
+/**
+ * Where the vendored parsers live: beside the executable in the shipped layout,
+ * otherwise in the checkout we're running from.
+ *
+ * Resolved from the module's own location, never from the cwd — refiner runs
+ * from the user's repo root, so a relative path would look for parsers inside
+ * whatever project is being reviewed.
+ */
+function parserRoot(): string | null {
+  const beside = join(dirname(process.execPath), ASSET_DIR_NAME, PARSER_DIR_NAME)
+  if (existsSync(beside)) return beside
+  // A compiled binary's `import.meta.dir` is inside Bun's virtual filesystem, so
+  // this check simply fails there and the sidecar above is the only answer.
+  const inRepo = join(import.meta.dir, '..', 'assets', PARSER_DIR_NAME)
+  if (existsSync(inRepo)) return inRepo
+  return null
+}
+
+/**
+ * Hand the vendored grammars to the client. Per-language and best-effort: a
+ * half-installed sidecar loses the languages it's missing, not all of them.
+ */
+function registerVendoredParsers(client: ReturnType<typeof getTreeSitterClient>): void {
+  const root = parserRoot()
+  if (!root) return
+  for (const filetype of VENDORED_FILETYPES) {
+    const wasm = join(root, filetype, 'parser.wasm')
+    const highlights = join(root, filetype, 'highlights.scm')
+    if (!existsSync(wasm) || !existsSync(highlights)) continue
+    client.addFiletypeParser({ filetype, wasm, queries: { highlights: [highlights] } })
+  }
+}
+
 let initialized: Promise<boolean> | null = null
 
 /** Initialize the shared client once; false when highlighting is unavailable. */
 async function ensureClient(): Promise<boolean> {
   initialized ??= (async () => {
     try {
-      await getTreeSitterClient().initialize()
+      const client = getTreeSitterClient()
+      await client.initialize()
+      registerVendoredParsers(client)
       return true
     } catch {
       return false
@@ -211,6 +288,7 @@ async function runsFor(text: string, filetype: string, firstLine: number): Promi
   for (const h of highlights) {
     const [start, end, group] = h
     if (end <= start) continue
+    if (NON_VISUAL_GROUPS.has(group)) continue
     let li = lineIndexOf(lineStart, start)
     // A capture can span lines (block comments, template literals): clip per line.
     while (li < lineStart.length && lineStart[li] < end) {

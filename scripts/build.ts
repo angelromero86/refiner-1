@@ -13,7 +13,7 @@
 
 import { cp, mkdir, rm } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { ASSET_DIR_NAME, RUNTIME_ASSETS } from '../src/syntax.ts'
+import { ASSET_DIR_NAME, PARSER_DIR_NAME, RUNTIME_ASSETS } from '../src/syntax.ts'
 
 const root = join(import.meta.dir, '..')
 const outDir = join(root, 'dist')
@@ -36,7 +36,13 @@ for (const rel of RUNTIME_ASSETS) {
   await cp(from, to, { recursive: true })
 }
 
+// Our own grammars ride along in the same sidecar, which is the only place a
+// compiled binary can find them — `src/syntax.ts` looks here first.
+await cp(join(root, 'assets', PARSER_DIR_NAME), join(assetsDir, PARSER_DIR_NAME), {
+  recursive: true,
+})
+
 const size = (await Bun.file(binary).stat()).size
 console.log(`\ndist/refiner            ${(size / 1024 / 1024).toFixed(1)} MB`)
-console.log(`dist/${ASSET_DIR_NAME}/     tree-sitter runtime + grammars`)
+console.log(`dist/${ASSET_DIR_NAME}/     tree-sitter runtime + grammars (bundled and vendored)`)
 console.log(`\nInstall both together, e.g.:\n  cp -R dist/refiner dist/${ASSET_DIR_NAME} ~/.local/bin/`)

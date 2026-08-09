@@ -70,6 +70,13 @@ export interface Palette {
   threadLabel: RGBA
   threadMarker: RGBA
   cursorBg: RGBA
+  /**
+   * The cursor row of a pane that does NOT have focus. Halfway to the
+   * background: with the pane borders gone, "no highlight at all" was the only
+   * thing left saying a pane was idle, and it cost the reader the one thing they
+   * needed on coming back — where they were.
+   */
+  cursorBgIdle: RGBA
   background: RGBA
 }
 
@@ -115,6 +122,14 @@ export interface Styles {
   /** Paints the `●` beside files that have at least one thread. */
   marker: Style
   treeGuide: Style
+
+  /** The one-row title over a pane, and its focused variant. */
+  paneTitle: Style
+  paneTitleFocus: Style
+  /** The rules dividing header from panes, and tree from diff. */
+  paneRule: Style
+  /** The lighter rule under a pane's own title. */
+  paneRuleSoft: Style
 
   addCursorRow: CursorRowStyles
   delCursorRow: CursorRowStyles
@@ -179,6 +194,16 @@ export function syntaxColor(group: string): RGBA | undefined {
   return found
 }
 
+/** `t` of the way from `a` to `b`, per channel. */
+function mix(a: RGBA, b: RGBA, t: number): RGBA {
+  return RGBA.fromValues(
+    a.r + (b.r - a.r) * t,
+    a.g + (b.g - a.g) * t,
+    a.b + (b.b - a.b) * t,
+    1,
+  )
+}
+
 function buildStyles(t: Theme): Styles {
   const primary = RGBA.fromHex(t.primary)
   const accent = RGBA.fromHex(t.accent)
@@ -198,6 +223,10 @@ function buildStyles(t: Theme): Styles {
   const treeGuide = RGBA.fromHex(t.treeGuide)
   const cursorBg = RGBA.fromHex(t.cursorBg)
   const background = RGBA.fromHex(t.background)
+  // Derived rather than themed: it is the same cursor line at half weight, so a
+  // theme that retunes `cursor_bg` gets its idle variant for free instead of
+  // having to keep two keys in step.
+  const cursorBgIdle = mix(cursorBg, background, 0.5)
 
   // Cursor row variants per line kind. The bg is always cursorBg so the
   // selection color wins; the fg keeps the kind's vivid color so you can still
@@ -226,6 +255,7 @@ function buildStyles(t: Theme): Styles {
       threadLabel,
       threadMarker,
       cursorBg,
+      cursorBgIdle,
       background,
     },
 
@@ -274,6 +304,19 @@ function buildStyles(t: Theme): Styles {
     // Guide lines (│ ├ └) get their own tone: bright enough to follow a nesting
     // level across the pane, dim enough to stay behind the filenames.
     treeGuide: { fg: treeGuide },
+
+    // The panes have no borders any more, so their titles carry the focus: the
+    // focused one takes the same color the focused border used to.
+    paneTitle: { fg: muted },
+    paneTitleFocus: { fg: focus, bold: true },
+    // Deliberately the same muted tone as `gutter`, which draws the `│` between
+    // the line numbers and the code: one divider tone in the whole app.
+    paneRule: { fg: muted },
+    // Half way from that tone to the background. The rule under a pane title
+    // divides a pane from its own label, which is a smaller claim than the rules
+    // that divide the panes from each other — so it is drawn quieter, and the
+    // main rule stays unambiguously the strongest line on screen.
+    paneRuleSoft: { fg: mix(muted, background, 0.5) },
 
     syntaxHighlight: t.syntaxHighlight,
 

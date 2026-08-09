@@ -331,11 +331,19 @@ los colores de sintaxis caen a los grupos Gruvbox de serie.
 
 ### Lenguajes
 
-El highlighting usa las gramáticas que trae OpenTUI: **TypeScript**
-(`.ts .tsx .mts .cts`), **JavaScript** (`.js .jsx .mjs .cjs`), **Markdown**
-(`.md .markdown`) y **Zig** (`.zig`). Cualquier otra extensión se muestra sin
-colorear, sin errores ni ruido. OpenTUI puede descargar más gramáticas, pero eso
-implicaría que refiner hiciera peticiones de red por su cuenta, así que no lo hace.
+De OpenTUI vienen **TypeScript** (`.ts .tsx .mts .cts`), **JavaScript**
+(`.js .jsx .mjs .cjs`), **Markdown** (`.md .markdown`) y **Zig** (`.zig`).
+
+Las demás las trae refiner en `assets/parsers/`: **JSON** (`.json`), **TOML**
+(`.toml`), **CSS** (`.css`), **SCSS** (`.scss`), **HTML** (`.html .htm`) y **XML**
+(`.xml .svg`). Van compiladas a WebAssembly y se cargan desde disco, así que
+refiner no hace ninguna petición de red por su cuenta — ni al arrancar ni nunca.
+`scripts/fetch-parsers.ts` las regenera y documenta de dónde sale cada una.
+
+Cualquier otra extensión se muestra sin colorear, sin errores ni ruido.
+
+Si instalas el binario compilado, copia `refiner-assets/` junto a él: ahí viajan
+las gramáticas, y sin ese directorio el highlighting se apaga en silencio.
 
 ### Estado
 

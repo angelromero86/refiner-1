@@ -189,6 +189,36 @@ Overlapping captures are normal (tree-sitter emits `variable`, then `type`, then
 `constant` for one span). They're painted into a per-column array so the most
 specific wins, then collapsed back into runs.
 
+**Not every capture is a color.** The queries come from nvim-treesitter, which
+also marks up editor features we don't implement: `spell`/`nospell` for the spell
+checker, `conceal` for delimiters an editor would hide, `none` for "explicitly
+nothing". They arrive AFTER the visual capture covering the same span, so the
+last-wins painter buried the real one under them — a markdown code span was
+captured as `markup.raw` and then overwritten by `nospell`, which no theme maps,
+so it rendered as plain text. `NON_VISUAL_GROUPS` drops them. This is most of why
+markdown used to look unhighlighted; the other half was the theme having no
+`markup.*` colors at all, only the `title`/`emphasis`/`literal`/`reference`/`uri`
+names the Go original used, which no tree-sitter grammar has ever emitted.
+
+**We ship our own grammars.** @opentui/core bundles four — typescript,
+javascript, markdown, zig — so everything else fell through to flat diff colors.
+`assets/parsers/<filetype>/` adds json, toml, css, scss, html and xml as a
+`parser.wasm` plus one `highlights.scm`, handed to the client at startup through
+`addFiletypeParser`, which takes local paths. Nothing is fetched at runtime: a
+git TUI opening network connections on its own is not a feature.
+
+Three things about that. The artifacts are committed but `scripts/fetch-parsers.ts`
+regenerates them, and it is where each one's origin and license lives — grammars
+come from their own release pages so they match the queries written against them,
+except SCSS, which publishes no wasm and is compiled from its npm tarball with
+the tree-sitter CLI. `parserRoot()` resolves from the module's own location, never
+the cwd, because refiner runs from the *user's* repo root — and a compiled binary
+resolves nothing that way at all, so the sidecar copy `bun run build` writes is
+its only route. And the failure mode is silence in every direction: an unmapped
+extension, a missing asset and a query that won't compile against its grammar all
+look the same on screen, like a file nobody colored. `test/syntax.test.ts` pins
+the mapping, the assets and the build step for that reason.
+
 `configureAssetRoot()` exists because OpenTUI resolves its tree-sitter assets
 relative to its own module URL, which under Bun is the global install cache where
 the `web-tree-sitter` peer dep isn't reachable. Setting `OTUI_ASSET_ROOT` to a real
@@ -213,8 +243,9 @@ here" cue. The word "message" is not used anywhere.
 
 `src/keymap.ts` is the single source of truth for the `k` overlay. There is no
 footer: it cost a permanent row to repeat the same hints, so the keys moved behind
-`k` (aliased `?`) and the header advertises it. Pane position readouts live in the
-panes' `bottomTitle`, which costs no rows.
+`k` (aliased `?`) and the header advertises it. The diff pane's line readout rides
+its title row (see Layout). The tree deliberately has no counterpart: its cursor
+row is on screen already, so a `3/14` index only restated it.
 
 If you add a binding in `dispatch.ts`, add it to `keymap.ts` too — nothing else
 surfaces it, so an unlisted key is an undiscoverable key.
@@ -251,3 +282,61 @@ the renderable tree; `src/dispatch.ts` routes keys through `src/keys.ts`, which
 normalizes OpenTUI events into the compact strings ("shift+up", "alt+enter", " ")
 the handlers switch on. Feature logic lives in `staging.ts`, `threads-ui.ts` and
 `finder.ts` as functions taking the app — mirroring the Go methods they came from.
+
+**The frame is four rows, one column and two junctions.** Row 0 is the header —
+repo · source on the left, the counts and `k keys` on the right. Row 1 is a rule
+across the full width. Row 2 is the title row, whose halves describe the pane under
+each: CHANGES/ALL over the tree, path + view mode + line readout over the diff.
+Under it the vertical rule divides tree from diff, meeting the horizontal one in a
+`┬`. Row 3 is a second, lighter rule, closing each title off from the pane it names
+— without it the first file and the first line of code sit flush under a label the
+same size as they are, and the eye reads the title as the first row of the list.
+The panes are borderless, so the height math is one step: `paneInnerHeight()` is
+`height - 4`, and `diffPanelWidth()` only has to give the vertical rule back its
+column. What this replaced
+was a boxed header plus two rounded pane borders — five rows and eight columns of
+chrome — carrying labels that sat on the wrong pane anyway: the file-list mode and
+the view mode were in the header, away from the pane each one describes and from
+the key that changes it. Overlays keep their borders; they float over the panes and
+need the edge.
+
+The rules are one family — `│ ─ ┬ ┼`, light box-drawing — in the same muted tone as
+the `│` the diff already draws between its line numbers and its code. They carry
+exactly two weights, and which one a rule gets is a claim about what it divides:
+the rules between the panes are `paneRule`; the one between a pane and its own
+title is `paneRuleSoft`, half way from that tone to the background. A third weight
+is how a frame starts growing back.
+
+Both horizontal rules are drawn full-bleed by `buildRuleRow` — no padding, and off
+`treePanelWidth()` rather than the panes' own boxes — because each has to land its
+junction on the exact column the vertical rule occupies. They differ only there:
+`┬` under the header, where the divide starts, and `┼` under the titles, which the
+divide passes straight through. The junction always takes the strong tone, so the
+vertical rule reads as continuous from the `┬` to the bottom of the screen while
+the light rule crosses behind it. A plain `│` there instead leaves the light rule
+visibly broken on both sides of it.
+
+The title row is a flex row of the same three widths as the panes below it — tree
+box, rule, diff box — and not one full-width string with the columns worked out by
+hand. It has to stay aligned with pane widths that move under `[`/`]`, the tree
+auto-hide and every resize, and letting the layout engine do that is the difference
+between "aligned" and "aligned until someone edits a padding".
+
+**Focus moves the text, never the furniture.** The focused pane's title takes
+`focus` and bold, and the tree's cursor row stays painted while the tree is idle,
+at the derived `cursorBgIdle` — half way to the background — instead of vanishing.
+That second one is not decoration: a lit border used to say "this pane is asleep",
+and without one a tree that also forgot where the cursor was left nothing to come
+back to. The rules are deliberately NOT part of this. A pass that had the vertical
+rule lean toward the focused pane (`▌`/`▐`) read as the layout twitching on every
+`←`/`→`, and the half block was twice the weight of every other line on screen.
+The diff pane still drops its cursor row and selection when idle
+(`RowState.focused`, gated inside all three renderers in `render.ts`); giving it
+the tree's treatment means an idle variant of every `CursorRowStyles` set, which is
+a bigger change than it looks.
+
+**The scrollbar column only exists when it can scroll.** `buildContent` reserves
+the last column for it when `activeRowCount() > h` and hands it to the code
+otherwise — a diff that fits shows its change bands as the diff itself, so the
+minimap was drawing a second copy of what was already on screen and charging a
+column for it.

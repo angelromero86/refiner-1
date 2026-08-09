@@ -190,11 +190,22 @@ export function defaultSyntax(): Record<string, string> {
     punctuation: '#a89984', // fg4 — present but recessive
     comment: '#928374', // gray
     text: '#ebdbb2',
-    title: '#fabd2f',
-    emphasis: '#ebdbb2',
-    literal: '#b8bb26',
-    reference: '#8ec07c',
-    uri: '#83a598',
+
+    // Prose, i.e. what markdown emits. These used to be listed under the names
+    // the Go original used — `title`, `emphasis`, `literal`, `reference`, `uri`
+    // — which no tree-sitter grammar has ever emitted, so every markdown capture
+    // fell through to no color and the file rendered bare. The colors are the
+    // old intent, moved onto the group names the parser actually produces.
+    markup: '#ebdbb2',
+    'markup.heading': '#fabd2f', // yellow, like a type name — the structure
+    'markup.strong': '#fe8019', // orange: no bold available, so it needs a color
+    'markup.italic': '#d3869b', // purple, for the same reason
+    'markup.raw': '#b8bb26', // green — a code span IS a string
+    'markup.link': '#83a598', // blue
+    'markup.link.label': '#8ec07c', // aqua — the words you read
+    'markup.list': '#a89984', // fg4: bullets are punctuation
+    'markup.quote': '#928374', // gray, like a comment
+    'markup.strikethrough': '#928374',
   }
 }
 

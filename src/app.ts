@@ -166,6 +166,7 @@ export type StagingJob =
 /** Shared empty result for `stagedFor`, so the hot render path allocates nothing. */
 const EMPTY_STAGED: ReadonlySet<number> = new Set<number>()
 
+
 /** The FSM state of the thread modal. */
 export enum ModalMode {
   Browse,
@@ -1013,8 +1014,9 @@ export class App {
 
   // ---------------------------------------------------------------- layout
   // All derived from width/height so the view stays a pure function of state.
-  // Keep consistent with the border widths used when building the panes
-  // (rounded border = 1 column each side).
+  // The panes are borderless: the only chrome is the four rows off the top (the
+  // header, its rule, the pane titles and the lighter rule under them) and the
+  // one column of rule between the panes.
 
   /** True when the tree pane is currently zero-width. */
   treeHidden(): boolean {
@@ -1027,19 +1029,26 @@ export class App {
     return Math.max(24, Math.floor((this.width * pct) / 100))
   }
 
+  /** The rule dividing the panes; zero columns when the tree is hidden. */
+  paneRuleWidth(): number {
+    return this.treeHidden() ? 0 : 1
+  }
+
   diffPanelWidth(): number {
-    return Math.max(20, this.width - this.treePanelWidth())
+    return Math.max(20, this.width - this.treePanelWidth() - this.paneRuleWidth())
   }
 
-  middleHeight(): number {
-    // Header only (3 rows). There is no footer: the keymap moved into the `k`
-    // overlay, which buys the diff a row back.
-    return Math.max(1, this.height - 3)
-  }
-
-  /** Rows available INSIDE a pane, after its own top+bottom border. */
+  /**
+   * Rows available inside a pane.
+   *
+   * Four rows of chrome, each of them a line of information or a divider: the
+   * header, the rule under it, the pane titles, and the lighter rule under
+   * those. There is no footer — the keymap moved into the `k` overlay — and the
+   * panes have no borders, so a pane runs from there to the last row of the
+   * terminal.
+   */
   paneInnerHeight(): number {
-    return Math.max(1, this.middleHeight() - 2)
+    return Math.max(1, this.height - 4)
   }
 
   /**
