@@ -117,7 +117,93 @@ export interface Theme {
   background: string
 }
 
+/**
+ * The built-in palettes, in the order the `t` picker lists them.
+ *
+ * A theme is a whole Theme value, not a patch over the default: a light theme
+ * has to move every knob (backgrounds, diff washes, the thread plum), and a
+ * palette expressed as a diff against a dark one is a palette nobody can read as
+ * a palette. The cost is repetition, which is the point — each entry is
+ * self-contained and reviewable next to the colors it names.
+ */
+export interface ThemeEntry {
+  /** Stable id: what config.toml and state.json store. */
+  name: string
+  /** One line for the picker, saying what the palette is for. */
+  about: string
+  build(): Theme
+}
+
+export const BUILTIN_THEMES: readonly ThemeEntry[] = [
+  {
+    name: 'gruvbox-dark',
+    about: 'warm, low-contrast dark — the original',
+    build: gruvboxDark,
+  },
+  {
+    name: 'gruvbox-light',
+    about: 'the same palette on paper, for bright rooms',
+    build: gruvboxLight,
+  },
+  {
+    name: 'vesper',
+    about: 'near-monochrome dark, orange and mint accents',
+    build: vesper,
+  },
+]
+
+export const DEFAULT_THEME_NAME = 'gruvbox-dark'
+
+/** themeByName returns undefined for an unknown name — callers fall back. */
+export function themeByName(name: string): Theme | undefined {
+  return BUILTIN_THEMES.find((t) => t.name === name)?.build()
+}
+
+/**
+ * The parts of a palette config.toml is allowed to override.
+ *
+ * Kept as a separate value rather than folded into the resolved Theme because
+ * the theme can change at runtime (the `t` picker) and the overrides have to
+ * survive that: they are the user's explicit instruction, so they are re-applied
+ * on top of whichever base palette is active rather than being a snapshot of the
+ * one that happened to be loaded at startup.
+ */
+export interface ThemeOverrides {
+  colors: Partial<Record<ColorKey, string>>
+  syntax: Record<string, string>
+  syntaxHighlight?: boolean
+}
+
+export function emptyOverrides(): ThemeOverrides {
+  return { colors: {}, syntax: {} }
+}
+
+/**
+ * resolveTheme builds the live palette: a built-in base with the config's own
+ * keys stamped on top. An unknown name falls back to the default rather than
+ * failing — a typo in config.toml or a state.json written by a newer build
+ * should cost the theme, not the session.
+ */
+export function resolveTheme(name: string, overrides: ThemeOverrides): Theme {
+  const base = themeByName(name) ?? defaultTheme()
+  const theme: Theme = { ...base, syntax: { ...base.syntax } }
+  for (const [key, value] of Object.entries(overrides.colors)) {
+    if (value) theme[key as ColorKey] = value
+  }
+  for (const [group, color] of Object.entries(overrides.syntax)) {
+    if (color) theme.syntax[group] = color
+  }
+  if (typeof overrides.syntaxHighlight === 'boolean') {
+    theme.syntaxHighlight = overrides.syntaxHighlight
+  }
+  return theme
+}
+
 export function defaultTheme(): Theme {
+  return gruvboxDark()
+}
+
+function gruvboxDark(): Theme {
   return {
     // Gruvbox Dark. Chrome uses the warm bright accents; the diff backgrounds are
     // gruvbox's own DiffAdd/DiffDelete tints so added and removed lines read as
@@ -150,63 +236,207 @@ export function defaultTheme(): Theme {
 }
 
 /**
- * Capture group → color, following gruvbox.nvim's assignments. Only the roots are
- * listed; dotted children inherit (see Theme.syntax).
+ * Gruvbox Light. The same palette gruvbox publishes for a paper background: the
+ * FADED variants of each hue, which are the only ones that survive dark text on
+ * light — the bright accents the dark theme uses wash out completely up here.
+ *
+ * The diff washes are the one place this is not a straight transposition. A dark
+ * theme tints toward its hue by ADDING light, and doing the mirror image (tinting
+ * toward black) makes an added line read as a shadow. They are near-white tints
+ * of the same green/red/blue instead, light enough that the faded syntax colors
+ * still read on top of them.
  */
-export function defaultSyntax(): Record<string, string> {
+function gruvboxLight(): Theme {
   return {
-    keyword: '#fb4934', // red
-    conditional: '#fb4934',
-    repeat: '#fb4934',
-    label: '#fb4934',
-    exception: '#fb4934',
+    primary: '#af3a03', // faded orange
+    accent: '#b57614', // faded yellow
+    focus: '#427b58', // faded aqua
+    muted: '#7c6f64', // fg4 — dark enough to read on bg0
+    foreground: '#3c3836', // fg1
 
-    function: '#b8bb26', // green
-    string: '#b8bb26',
-    character: '#b8bb26',
+    addBg: '#dfe9c0',
+    delBg: '#f4d5cd',
+    addFg: '#79740e', // faded green
+    delFg: '#9d0006', // faded red
+    stagedBg: '#d3e2e8',
+    stagedFg: '#076678', // faded blue
 
-    number: '#d3869b', // purple
-    boolean: '#d3869b',
-    float: '#d3869b',
-    constant: '#d3869b',
+    thread: '#ebd3e0', // pale plum — still a background
+    threadLabel: '#282828', // fg0: dark label on a light cue
+    threadMarker: '#8f3f71', // faded purple
 
-    type: '#fabd2f', // yellow
-    constructor: '#fabd2f',
-    attribute: '#fabd2f',
-    annotation: '#fabd2f',
+    treeGuide: '#bdae93', // bg3
+    cursorBg: '#ebdbb2', // bg1 — the light cursorline
+    background: '#fbf1c7', // bg0
 
-    variable: '#ebdbb2', // fg1
-    property: '#ebdbb2',
-    parameter: '#ebdbb2',
-    field: '#ebdbb2',
-    namespace: '#ebdbb2',
-    module: '#ebdbb2',
-    operator: '#ebdbb2',
+    syntaxHighlight: true,
+    syntax: buildSyntax({
+      keyword: '#9d0006', // red
+      func: '#79740e', // green
+      string: '#79740e',
+      number: '#8f3f71', // purple
+      type: '#b57614', // yellow
+      variable: '#3c3836', // fg1
+      tag: '#427b58', // aqua
+      link: '#076678', // blue
+      brand: '#af3a03', // orange
+      punctuation: '#7c6f64', // fg4
+      comment: '#928374', // gray
+    }),
+  }
+}
 
-    tag: '#8ec07c', // aqua
-    include: '#8ec07c',
-    preproc: '#8ec07c',
+/**
+ * Vesper. A near-monochrome dark theme: structure comes from white-on-black and
+ * only two accents are ever spent — warm orange and mint.
+ *
+ * Which means it deliberately does NOT color keywords. That is the whole idea of
+ * the palette, and it is worth saying out loud here because a later pass looking
+ * only at the syntax map would read the gray keywords as an omission and "fix"
+ * them into red.
+ */
+function vesper(): Theme {
+  return {
+    primary: '#ffc799', // orange
+    accent: '#99ffe4', // mint
+    focus: '#ffffff', // plain white: in this palette, "active" is full contrast
+    muted: '#8b8b8b',
+    foreground: '#ffffff',
 
-    punctuation: '#a89984', // fg4 — present but recessive
-    comment: '#928374', // gray
-    text: '#ebdbb2',
+    addBg: '#12251f',
+    delBg: '#2a1618',
+    addFg: '#99ffe4', // mint stands in for green
+    delFg: '#ff8080',
+    stagedBg: '#26201b',
+    stagedFg: '#ffc799', // orange stands in for blue
+
+    thread: '#3a2a3a',
+    threadLabel: '#ffffff',
+    threadMarker: '#ff8080',
+
+    treeGuide: '#3a3a3a',
+    cursorBg: '#2a2a2a',
+    background: '#101010',
+
+    syntaxHighlight: true,
+    syntax: buildSyntax({
+      keyword: '#a0a0a0', // gray on purpose — see above
+      func: '#ffc799',
+      string: '#99ffe4',
+      number: '#ffc799',
+      type: '#ffc799',
+      variable: '#ffffff',
+      tag: '#ffc799',
+      link: '#a0a0a0',
+      brand: '#ffc799',
+      punctuation: '#8b8b8b',
+      comment: '#8b8b8b',
+    }),
+  }
+}
+
+/**
+ * The eleven colors a syntax map is actually made of.
+ *
+ * Every theme fills the same roles and `buildSyntax` expands them into the full
+ * capture-group table, so a new palette cannot ship half a map — which is the
+ * failure this shape exists to prevent: the `markup.*` groups were missing
+ * entirely once already, and markdown rendered bare for it.
+ */
+interface SyntaxRoles {
+  keyword: string
+  func: string
+  string: string
+  number: string
+  type: string
+  variable: string
+  tag: string
+  /** Links and other "points elsewhere" text. */
+  link: string
+  /** The theme's own primary — used for bold prose, which has no bold attribute. */
+  brand: string
+  punctuation: string
+  comment: string
+}
+
+/**
+ * Capture group → color. Only the roots are listed; dotted children inherit
+ * (see Theme.syntax). The assignments follow gruvbox.nvim's.
+ */
+function buildSyntax(c: SyntaxRoles): Record<string, string> {
+  return {
+    keyword: c.keyword,
+    conditional: c.keyword,
+    repeat: c.keyword,
+    label: c.keyword,
+    exception: c.keyword,
+
+    function: c.func,
+    string: c.string,
+    character: c.string,
+
+    number: c.number,
+    boolean: c.number,
+    float: c.number,
+    constant: c.number,
+
+    type: c.type,
+    constructor: c.type,
+    attribute: c.type,
+    annotation: c.type,
+
+    variable: c.variable,
+    property: c.variable,
+    parameter: c.variable,
+    field: c.variable,
+    namespace: c.variable,
+    module: c.variable,
+    operator: c.variable,
+
+    tag: c.tag,
+    include: c.tag,
+    preproc: c.tag,
+
+    punctuation: c.punctuation, // present but recessive
+    comment: c.comment,
+    text: c.variable,
 
     // Prose, i.e. what markdown emits. These used to be listed under the names
     // the Go original used — `title`, `emphasis`, `literal`, `reference`, `uri`
     // — which no tree-sitter grammar has ever emitted, so every markdown capture
     // fell through to no color and the file rendered bare. The colors are the
     // old intent, moved onto the group names the parser actually produces.
-    markup: '#ebdbb2',
-    'markup.heading': '#fabd2f', // yellow, like a type name — the structure
-    'markup.strong': '#fe8019', // orange: no bold available, so it needs a color
-    'markup.italic': '#d3869b', // purple, for the same reason
-    'markup.raw': '#b8bb26', // green — a code span IS a string
-    'markup.link': '#83a598', // blue
-    'markup.link.label': '#8ec07c', // aqua — the words you read
-    'markup.list': '#a89984', // fg4: bullets are punctuation
-    'markup.quote': '#928374', // gray, like a comment
-    'markup.strikethrough': '#928374',
+    markup: c.variable,
+    'markup.heading': c.type, // like a type name — the structure
+    'markup.strong': c.brand, // no bold available, so it needs a color
+    'markup.italic': c.number, // for the same reason
+    'markup.raw': c.string, // a code span IS a string
+    'markup.link': c.link,
+    'markup.link.label': c.tag, // the words you read
+    'markup.list': c.punctuation, // bullets are punctuation
+    'markup.quote': c.comment,
+    'markup.strikethrough': c.comment,
   }
+}
+
+/**
+ * Gruvbox Dark's capture-group table, kept as the exported default because
+ * config.ts merges `[syntax]` over it.
+ */
+export function defaultSyntax(): Record<string, string> {
+  return buildSyntax({
+    keyword: '#fb4934', // red
+    func: '#b8bb26', // green
+    string: '#b8bb26',
+    number: '#d3869b', // purple
+    type: '#fabd2f', // yellow
+    variable: '#ebdbb2', // fg1
+    tag: '#8ec07c', // aqua
+    link: '#83a598', // blue
+    brand: '#fe8019', // orange
+    punctuation: '#a89984', // fg4
+    comment: '#928374', // gray
+  })
 }
 
 /** configDir honors XDG_CONFIG_HOME, matching Go's os.UserConfigDir(). */
@@ -242,4 +472,4 @@ export const THEME_KEY_MAP: Record<string, ColorKey> = {
 }
 
 /** The Theme fields that hold a single color string. */
-type ColorKey = Exclude<keyof Theme, 'syntax' | 'syntaxHighlight'>
+export type ColorKey = Exclude<keyof Theme, 'syntax' | 'syntaxHighlight'>

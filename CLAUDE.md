@@ -170,6 +170,31 @@ partly for that reason; it ignores the `comments.json.<pid>.<n>.tmp` we rename f
 - Widths come from `Bun.stringWidth` (`src/text.ts`), not `String.length` — the Go
   original measured bytes in `fit()` and misaligned any row with non-ASCII.
 
+## Themes
+
+`src/theme.ts` owns the built-in palettes (`BUILTIN_THEMES`: gruvbox-dark,
+gruvbox-light, vesper) and `t` swaps between them at runtime. Each entry is a
+WHOLE `Theme`, never a patch over the default — a light theme moves every knob,
+and `buildSyntax` expands eleven roles into the full capture-group table so a new
+palette cannot ship half a map (the `markup.*` groups went missing exactly once
+already, and markdown rendered bare for it).
+
+Two things decide which palette is live, and they are kept apart on purpose.
+config.toml contributes a base NAME (`theme = "vesper"`) plus individual color
+keys, and those keys are held as `Config.themeOverrides` rather than baked into
+the resolved theme — they are the user's explicit instruction, so `resolveTheme`
+re-applies them over whichever base the picker lands on. state.json contributes
+the picker's last choice, which outranks the file because pressing `t` is the
+more recent instruction; `App.themeChoice` is written ONLY by `chooseTheme`, so
+saving any other preference can't latch config.toml's theme into state.json and
+shadow the file forever. An unknown name anywhere degrades to the default.
+
+Everything reads `S` while drawing, so a swap needs nothing but a render — except
+the colors that live ON renderables built once (pane fills, overlay borders and
+backgrounds, the two text widgets). `App.themeEpoch` is bumped by `setTheme` and
+the view restamps those in `applyPalette()` when it changes, rather than
+reassigning them every frame and marking each one dirty.
+
 ## Syntax highlighting
 
 `src/syntax.ts` highlights the diff as **two whole documents** (post-change =

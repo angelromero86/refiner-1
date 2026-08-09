@@ -78,6 +78,10 @@ export const KEYMAP: readonly KeySection[] = [
       { keys: 'r', what: 'refresh — re-reads git and .refiner/comments.json' },
       { keys: 'g', what: 'open lazygit' },
       { keys: 'k', what: 'this help (? works too)' },
+      {
+        keys: 't',
+        what: 'theme — ↑↓ previews on the diff behind, enter keeps it, esc puts the old one back',
+      },
       { keys: 'q / esc', what: 'quit — asks to confirm first' },
       { keys: '⌃c', what: 'quit immediately, from anywhere, no confirmation' },
     ],

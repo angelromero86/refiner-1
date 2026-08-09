@@ -41,7 +41,18 @@
 
 
 # ------------------------------------------------------------------------ tema
-# Los nombres describen el ROL, no el color. La paleta por defecto es Gruvbox Dark.
+# La paleta base. `t` dentro de refiner abre el selector y las va aplicando sobre el
+# diff mientras te mueves; lo que elijas ahí se guarda en state.json y manda sobre
+# esta clave. Un nombre que no exista se ignora y arranca con el default.
+#
+#   "gruvbox-dark"  → el default: cálido, poco contraste, oscuro
+#   "gruvbox-light" → la misma paleta sobre papel
+#   "vesper"        → casi monocromo oscuro, naranja y menta como únicos acentos
+# theme = "gruvbox-dark"
+
+# Los colores sueltos de abajo se aplican ENCIMA del tema elegido, sea cual sea: son
+# tuyos, así que sobreviven a cambiar de tema con `t`. Los nombres describen el ROL,
+# no el color; los valores comentados son los de Gruvbox Dark.
 #
 # primary    = "#fe8019"   # nombre del repo en el header, borde del header, borde de
 #                          # los modales, badge ? (untracked)

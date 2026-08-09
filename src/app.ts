@@ -54,6 +54,15 @@ import {
   type IconConfig,
   type PopupConfig,
 } from './config.ts'
+import {
+  BUILTIN_THEMES,
+  DEFAULT_THEME_NAME,
+  emptyOverrides,
+  resolveTheme,
+  themeByName,
+  type ThemeOverrides,
+} from './theme.ts'
+import { applyTheme } from './styles.ts'
 
 export enum Focus {
   Tree,
@@ -213,6 +222,19 @@ export interface HelpModal {
 }
 
 /**
+ * The theme picker (`t`).
+ *
+ * `original` is what to go back to on esc: moving the cursor applies the palette
+ * for real, because a swatch cannot tell you whether a theme is comfortable to
+ * read a diff in and the diff is right there behind the overlay. That makes esc
+ * a genuine undo rather than a way to close a box.
+ */
+export interface ThemePickerModal {
+  cursor: number
+  original: string
+}
+
+/**
  * The fuzzy file picker. `matches` indexes into App.files and is rebuilt on
  * every keystroke; `positions` holds where each query term matched, for the
  * highlight in the row renderer.
@@ -288,6 +310,27 @@ export class App {
   // every render without touching the filesystem.
   treeAutoHide = defaultUIState().treeAutoHide
   treeWidthPct = defaultUIState().treeWidthPct
+
+  /** The palette in force. Always a built-in name; see `initTheme`. */
+  themeName = DEFAULT_THEME_NAME
+  /**
+   * The name to WRITE to state.json, or '' while the user has never picked one.
+   *
+   * Deliberately not the same field as `themeName`: persisting the active theme
+   * would latch config.toml's `theme = …` into state.json the first time any
+   * other preference was saved, and from then on the file would be shadowed by a
+   * choice the user never made. Only the picker sets this.
+   */
+  private themeChoice = ''
+  /** config.toml's color keys, re-applied over every base palette. */
+  themeOverrides: ThemeOverrides = emptyOverrides()
+  /**
+   * Bumped on every palette change. The view holds colors on renderables it
+   * builds once (pane backgrounds, overlay borders, the text widgets), so it
+   * needs to know a repaint is not enough — this is what tells it to restamp
+   * them, without diffing palettes on every frame.
+   */
+  themeEpoch = 0
 
   /**
    * Destination line for a jump that was requested before the target file's
@@ -370,6 +413,7 @@ export class App {
   threadList: ThreadListModal | null = null
   finder: FinderModal | null = null
   help: HelpModal | null = null
+  themePicker: ThemePickerModal | null = null
   /** True while the quit confirmation is up. `q` and `esc` are easy to hit. */
   quitConfirm = false
 
@@ -416,7 +460,46 @@ export class App {
     app.repoName = name
     app.treeAutoHide = state.treeAutoHide
     app.treeWidthPct = state.treeWidthPct
+    app.themeChoice = state.themeName
     return app
+  }
+
+  /**
+   * initTheme settles the startup palette: the picker's last choice if there is
+   * one, else config.toml's `theme`, else the default. Called once, after
+   * `create()` has read state.json and the config has been parsed.
+   *
+   * A name neither file agrees on (a theme a later build removed) resolves to
+   * the default inside `resolveTheme`; `themeName` is normalized here so the
+   * picker's cursor still lands on something real.
+   */
+  initTheme(configThemeName: string, overrides: ThemeOverrides): void {
+    this.themeOverrides = overrides
+    const wanted = this.themeChoice !== '' ? this.themeChoice : configThemeName
+    this.setTheme(themeByName(wanted) ? wanted : DEFAULT_THEME_NAME)
+  }
+
+  /**
+   * setTheme swaps the live palette without persisting anything — the picker's
+   * live preview, and the startup path. `chooseTheme` is the committing form.
+   */
+  setTheme(name: string): void {
+    this.themeName = name
+    applyTheme(resolveTheme(name, this.themeOverrides))
+    this.themeEpoch++
+  }
+
+  /** chooseTheme is setTheme plus "remember this across sessions". */
+  chooseTheme(name: string): void {
+    this.setTheme(name)
+    this.themeChoice = name
+    this.persistState()
+  }
+
+  /** The picker's list, in a fixed order so the cursor means something. */
+  themeIndex(): number {
+    const i = BUILTIN_THEMES.findIndex((t) => t.name === this.themeName)
+    return i < 0 ? 0 : i
   }
 
   /**
@@ -424,9 +507,11 @@ export class App {
    * a preference is annoying, not fatal.
    */
   persistState(): void {
-    void saveState({ treeAutoHide: this.treeAutoHide, treeWidthPct: this.treeWidthPct }).catch(
-      () => {},
-    )
+    void saveState({
+      treeAutoHide: this.treeAutoHide,
+      treeWidthPct: this.treeWidthPct,
+      themeName: this.themeChoice,
+    }).catch(() => {})
   }
 
   /**

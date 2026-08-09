@@ -247,6 +247,7 @@ orden. La fuente de verdad es [`src/keymap.ts`](src/keymap.ts).
 | `r` | Refrescar — re-lee git y `.refiner/comments.json` |
 | `g` | Abrir lazygit |
 | `k` | Esta ayuda (`?` también) |
+| `t` | Selector de tema — `↑↓` lo aplica de verdad sobre el diff que tienes detrás, `enter` lo deja puesto, `esc` devuelve el que había |
 | `q` / `esc` | Salir — pide confirmación primero |
 | `⌃c` | Salir inmediatamente, desde donde sea, sin confirmación |
 
@@ -257,12 +258,14 @@ Dentro de cada overlay, además:
 - **Lista de threads** (`c`): `↑↓`, `enter` abre el thread seleccionado, `esc` o `c`
   cierran.
 - **Ayuda** (`k`): `↑↓`, `⌃u` / `⌃d`, `home`; `esc`, `k`, `?` o `q` cierran.
+- **Temas** (`t`): `↑↓` previsualiza, `enter` guarda la elección, `esc`, `t` o `q`
+  restauran el tema anterior.
 - **Confirmación de salida**: `y` o `enter` salen, `n`, `esc` o `q` vuelven.
 
 Los overlays son modales: se tragan cualquier otra tecla en vez de dejarla actuar
 sobre lo que hay detrás.
 
-`r`, `g`, `c`, `p`, `k`, `b`, `[`, `]`, `q` y las flechas `← →` se resuelven antes que
+`r`, `g`, `c`, `p`, `k`, `t`, `b`, `[`, `]`, `q` y las flechas `← →` se resuelven antes que
 el panel enfocado, así que funcionan igual desde el árbol y desde el diff.
 
 `j`/`k` **no** navegan. Eran un alias vim no documentado y `k` hacía falta para la
@@ -300,7 +303,14 @@ cp config.example.toml ~/.config/refiner/config.toml
 Solo tmux y zellij respetan `popup_*`: sin multiplexor el proceso hijo se queda la
 pantalla entera y no hay nada que dimensionar.
 
-**Paleta** — los nombres describen el ROL, no el color:
+**Tema**
+
+| Clave | Default | Qué hace |
+|-------|---------|----------|
+| `theme` | `"gruvbox-dark"` | Paleta base: `"gruvbox-dark"`, `"gruvbox-light"` o `"vesper"`. Un nombre que no existe se ignora y arranca con el default. Lo que elijas con `t` manda sobre esta clave |
+
+**Paleta** — se aplica encima del tema; los nombres describen el ROL, no el color
+(los defaults de la tabla son los de `gruvbox-dark`):
 
 | Clave | Default | Dónde se ve |
 |-------|---------|-------------|
@@ -354,7 +364,25 @@ que un emoji de 2 celdas no descuadra los nombres.
 
 ### Temas
 
-En [`themes/`](themes/) hay paletas alternativas listas para copiar —
+`t` abre el selector. Vienen tres paletas de serie:
+
+| Nombre | Qué es |
+|--------|--------|
+| `gruvbox-dark` | El default: cálido, poco contraste, oscuro |
+| `gruvbox-light` | La misma paleta sobre papel, para sitios con luz |
+| `vesper` | Casi monocromo oscuro, con naranja y menta como únicos acentos |
+
+Moverte por la lista **aplica** el tema de verdad: los paneles siguen ahí detrás del
+overlay, que es la única forma de saber si un tema se lee bien en un diff. `enter` lo
+deja puesto y lo recuerda en `state.json`; `esc` devuelve el que tenías.
+
+En el fichero de config, `theme = "vesper"` elige la paleta base de arranque. Manda
+lo último que hayas dicho: si alguna vez elegiste uno con `t`, ese gana; mientras no
+lo hayas hecho, manda el fichero. Las claves de color sueltas (`focus = "#ff00ff"`,
+`[syntax]`) son tuyas y se aplican **encima** de cualquier tema, también al cambiar
+de tema con `t`.
+
+En [`themes/`](themes/) hay además paletas listas para copiar al config —
 `omarchy.toml` es la ochre cálida con la que refiner nació. Solo llevan el chrome;
 los colores de sintaxis caen a los grupos Gruvbox de serie.
 
@@ -377,7 +405,8 @@ las gramáticas, y sin ese directorio el highlighting se apaga en silencio.
 ### Estado
 
 Las preferencias que refiner escribe él mismo van aparte, en
-`~/.config/refiner/state.json`: el ancho del árbol (`[` `]`) y el auto-hide (`b`).
+`~/.config/refiner/state.json`: el ancho del árbol (`[` `]`), el auto-hide (`b`) y el
+tema que hayas elegido con `t`.
 La vista **no** se persiste: cada sesión arranca en DIFF, y CHANGES/ALL tampoco —
 cada sesión arranca en CHANGES.
 

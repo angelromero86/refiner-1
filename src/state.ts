@@ -19,10 +19,21 @@ export interface UIState {
   treeAutoHide: boolean
   /** Tree pane width as a percentage of terminal width; clamped to 15..70. */
   treeWidthPct: number
+  /**
+   * The palette picked with `t`, or '' while the user has never picked one.
+   *
+   * Empty is not the same as the default name: it is what lets config.toml's
+   * `theme = …` keep working. The precedence is "last thing the user said" —
+   * a name here wins over the file, because pressing `t` is a more recent
+   * instruction than a line written some time ago, and a config edit wins back
+   * the moment the picker has never run. An unknown name (a theme this build
+   * dropped) falls back to the default rather than to a blank screen.
+   */
+  themeName: string
 }
 
 export function defaultUIState(): UIState {
-  return { treeAutoHide: false, treeWidthPct: 35 }
+  return { treeAutoHide: false, treeWidthPct: 35, themeName: '' }
 }
 
 export function statePath(): string {
@@ -40,6 +51,7 @@ export async function loadState(): Promise<UIState> {
     if (typeof raw.treeWidthPct === 'number' && raw.treeWidthPct > 0) {
       s.treeWidthPct = raw.treeWidthPct
     }
+    if (typeof raw.themeName === 'string') s.themeName = raw.themeName
     return s
   } catch {
     return s

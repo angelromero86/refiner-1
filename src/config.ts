@@ -10,9 +10,13 @@
 
 import {
   configPath,
-  defaultTheme,
+  DEFAULT_THEME_NAME,
+  emptyOverrides,
+  resolveTheme,
   THEME_KEY_MAP,
+  themeByName,
   type Theme,
+  type ThemeOverrides,
 } from './theme.ts'
 
 /**
@@ -51,7 +55,16 @@ export interface IconConfig {
 }
 
 export interface Config {
+  /** The palette in force at startup: `themeName`'s base with `themeOverrides` on top. */
   theme: Theme
+  /** Which built-in palette the file asked for; `t` can change it at runtime. */
+  themeName: string
+  /**
+   * The file's own color keys, kept apart from the resolved theme so switching
+   * palettes at runtime can re-apply them over the new base. A user who wrote
+   * `focus = "#ff0000"` means it in every theme.
+   */
+  themeOverrides: ThemeOverrides
   editor: EditorConfig
   popup: PopupConfig
   icons: IconConfig
@@ -143,7 +156,9 @@ function resolveLineStyle(command: string[], configured: unknown): LineStyle {
 export function defaultConfig(): Config {
   const command = resolveEditor(undefined)
   return {
-    theme: defaultTheme(),
+    theme: resolveTheme(DEFAULT_THEME_NAME, emptyOverrides()),
+    themeName: DEFAULT_THEME_NAME,
+    themeOverrides: emptyOverrides(),
     editor: { command, lineStyle: resolveLineStyle(command, undefined) },
     popup: { widthPct: DEFAULT_POPUP_PCT, heightPct: DEFAULT_POPUP_PCT },
     icons: { ...DEFAULT_ICONS },
@@ -165,23 +180,31 @@ export async function loadConfig(path = configPath()): Promise<Config> {
   const obj = parsed as Record<string, unknown>
 
   // ---- theme ----------------------------------------------------------
-  const defaults = defaultTheme()
-  const theme: Theme = { ...defaults, syntax: { ...defaults.syntax } }
+  // `theme = "vesper"` picks the base palette; the individual color keys below
+  // are stamped on top of it. An unknown name is ignored rather than fatal, and
+  // silently — a warning here would be printed on every launch for a typo the
+  // picker can fix in one keystroke.
+  const named = obj['theme']
+  const themeName =
+    typeof named === 'string' && themeByName(named) ? named : DEFAULT_THEME_NAME
+
+  const themeOverrides = emptyOverrides()
   for (const [fileKey, themeKey] of Object.entries(THEME_KEY_MAP)) {
     const v = obj[fileKey]
-    if (typeof v === 'string' && v !== '') theme[themeKey] = v
+    if (typeof v === 'string' && v !== '') themeOverrides.colors[themeKey] = v
   }
   if (typeof obj['syntax_highlight'] === 'boolean') {
-    theme.syntaxHighlight = obj['syntax_highlight']
+    themeOverrides.syntaxHighlight = obj['syntax_highlight']
   }
-  // `[syntax]` merges over the defaults rather than replacing them, so recoloring
-  // one group doesn't blank out every other.
+  // `[syntax]` merges over the theme's own table rather than replacing it, so
+  // recoloring one group doesn't blank out every other.
   const syntax = obj['syntax']
   if (typeof syntax === 'object' && syntax !== null) {
     for (const [group, color] of Object.entries(syntax as Record<string, unknown>)) {
-      if (typeof color === 'string' && color !== '') theme.syntax[group] = color
+      if (typeof color === 'string' && color !== '') themeOverrides.syntax[group] = color
     }
   }
+  const theme = resolveTheme(themeName, themeOverrides)
 
   // ---- editor ---------------------------------------------------------
   const command = resolveEditor(obj['editor'])
@@ -197,6 +220,8 @@ export async function loadConfig(path = configPath()): Promise<Config> {
 
   return {
     theme,
+    themeName,
+    themeOverrides,
     editor,
     popup,
     icons: resolveIcons(obj['icons']),

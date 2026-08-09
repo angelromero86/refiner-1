@@ -51,8 +51,12 @@ async function main(): Promise<void> {
   // Must run before anything reaches into OpenTUI's asset resolution.
   configureAssetRoot()
 
-  const { theme, editor, popup, icons, watch, warning } = await loadConfig()
+  const { theme, themeName, themeOverrides, editor, popup, icons, watch, warning } =
+    await loadConfig()
   if (warning) process.stderr.write(`warning: ${warning}\n`)
+  // The config's palette goes up first so anything that renders before the app
+  // exists is already themed; `initTheme` below re-resolves it once state.json
+  // has been read, because the picker's last choice outranks the file.
   applyTheme(theme)
 
   const source: Source =
@@ -61,6 +65,7 @@ async function main(): Promise<void> {
       : { mode: Mode.Uncommitted, target: '' }
 
   const app = await App.create(source)
+  app.initTheme(themeName, themeOverrides)
   app.root = root
   app.author = (await gitUserName()) || guessUser()
   app.editor = editor

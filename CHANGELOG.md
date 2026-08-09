@@ -7,6 +7,25 @@ formato de `.refiner/comments.json`.
 
 Como no hay tags todavía, cada versión lista los commits que la componen.
 
+## [0.1.4] — 2026-08-09
+
+### Añadido
+
+- **Selector de temas con `t`.** Tres paletas de serie — `gruvbox-dark` (la de
+  siempre), `gruvbox-light` y `vesper` — y moverte por la lista las aplica de
+  verdad sobre el diff que hay detrás del overlay, que es la única forma de
+  saber si un tema se lee bien. `enter` la deja puesta y la recuerda en
+  `state.json`; `esc` devuelve la anterior.
+- La clave `theme` en `config.toml` elige la paleta base de arranque. Los
+  colores sueltos que ya tuvieras configurados se siguen aplicando encima de
+  cualquier tema, también al cambiarlo con `t`; y si alguna vez elegiste uno con
+  `t`, esa elección manda sobre el fichero.
+- `test/theme.test.ts`: que cada paleta esté completa (todos los colores y toda
+  la tabla de sintaxis, `markup.*` incluido) y la precedencia entre
+  `state.json` y `config.toml`.
+
+<sub>Commits: este.</sub>
+
 ## [0.1.3] — 2026-08-09
 
 ### Cambiado

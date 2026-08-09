@@ -19,6 +19,7 @@ import {
   BoxRenderable,
   InputRenderable,
   InputRenderableEvents,
+  RGBA,
   StyledText,
   TextareaRenderable,
   TextRenderable,
@@ -26,6 +27,7 @@ import {
   type TextChunk,
 } from '@opentui/core'
 import { App, fileModeLabel, Focus, ModalMode, ViewMode, viewModeLabel } from './app.ts'
+import { BUILTIN_THEMES } from './theme.ts'
 import { KEYMAP } from './keymap.ts'
 import type { StoredThread } from './comments.ts'
 import { LineKind } from './diff.ts'
@@ -102,6 +104,13 @@ export class View {
 
   private helpBox!: BoxRenderable
   private helpText!: TextRenderable
+
+  private themeBox!: BoxRenderable
+  private themeText!: TextRenderable
+  /** Every overlay built by `overlayBox`, so a theme change can restamp them. */
+  private overlays: BoxRenderable[] = []
+  /** The palette generation these renderables were last painted for. */
+  private themeEpoch = -1
 
   private quitBox!: BoxRenderable
   private quitText!: TextRenderable
@@ -295,6 +304,10 @@ export class View {
     this.quitText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.quitBox.add(this.quitText)
 
+    this.themeBox = this.overlayBox()
+    this.themeText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.themeBox.add(this.themeText)
+
     this.finderBox.add(this.finderTitle)
     this.finderBox.add(this.finderInput)
     this.finderBox.add(this.finderText)
@@ -313,6 +326,32 @@ export class View {
     root.add(this.finderBox)
     root.add(this.helpBox)
     root.add(this.quitBox)
+    root.add(this.themeBox)
+  }
+
+  /**
+   * applyPalette restamps the colors that live ON renderables rather than on the
+   * chunks rebuilt each frame: the pane and overlay fills, the overlay borders,
+   * and the two text widgets. Everything else re-reads `S` while drawing, so a
+   * theme swap needs nothing more than the next render.
+   *
+   * Driven by App.themeEpoch rather than run every frame, because each of these
+   * assignments marks its renderable dirty.
+   */
+  private applyPalette(): void {
+    const p = S.palette
+    for (const box of [this.treeBox, this.ruleBox, this.contentBox]) {
+      box.backgroundColor = p.background
+    }
+    for (const box of this.overlays) {
+      box.backgroundColor = p.background
+      box.borderColor = p.primary
+    }
+    for (const input of [this.composeInput, this.finderInput]) {
+      input.placeholderColor = p.muted
+      input.textColor = p.foreground
+      input.focusedTextColor = p.foreground
+    }
   }
 
   private overlayBox(): BoxRenderable {
@@ -333,6 +372,7 @@ export class View {
       flexDirection: 'column',
     })
     b.visible = false
+    this.overlays.push(b)
     return b
   }
 
@@ -348,12 +388,18 @@ export class View {
     if (overlayOpen && !this.overlayWasOpen) this.refreshOutdated()
     this.overlayWasOpen = overlayOpen
 
+    if (this.themeEpoch !== app.themeEpoch) {
+      this.themeEpoch = app.themeEpoch
+      this.applyPalette()
+    }
+
     this.renderHeader()
     this.renderMiddle()
     this.renderThreadModal()
     this.renderThreadList()
     this.renderFinder()
     this.renderHelp()
+    this.renderThemePicker()
     this.renderQuitConfirm()
     this.syncWidgetFocus()
   }
@@ -1068,6 +1114,61 @@ export class View {
     this.helpBox.visible = true
   }
 
+  /**
+   * renderThemePicker draws the palette list (`t`).
+   *
+   * Each row carries a swatch built from that entry's OWN colors rather than the
+   * live ones — the four a diff is actually read in (add, delete, staged, the
+   * accent). The selected theme is already applied behind the box, so the
+   * swatches are there to say what the other rows would do before you walk onto
+   * them.
+   */
+  private renderThemePicker(): void {
+    const app = this.app
+    const picker = app.themePicker
+    if (!picker) {
+      this.themeBox.visible = false
+      return
+    }
+
+    const nameW = Math.max(...BUILTIN_THEMES.map((t) => textWidth(t.name)))
+    const rows: TextChunk[][] = [[chunk('Theme', S.appName)], []]
+
+    BUILTIN_THEMES.forEach((entry, i) => {
+      const on = i === picker.cursor
+      const t = entry.build()
+      rows.push([
+        chunk(on ? '▶ ' : '  ', S.hotkey),
+        chunk(entry.name.padEnd(nameW), on ? { ...S.text, bold: true } : S.text),
+        chunk('  '),
+        ...swatch(t.addFg, t.delFg, t.stagedFg, t.accent),
+        chunk('  '),
+        chunk(entry.about, S.dim),
+      ])
+    })
+
+    rows.push([])
+    rows.push([
+      chunk('↑↓', S.hotkey),
+      chunk(' preview · ', S.dim),
+      chunk('enter', S.hotkey),
+      chunk(' keep · ', S.dim),
+      chunk('esc', S.hotkey),
+      chunk(' revert', S.dim),
+    ])
+
+    const innerW = Math.max(...rows.map(chunksWidth))
+    const outerW = Math.min(app.width, innerW + 6)
+    const totalH = Math.min(app.height, rows.length + OVERLAY_CHROME_H)
+
+    this.themeText.content = rowsToStyledText(rows)
+    this.themeBox.width = outerW
+    this.themeBox.height = totalH
+    this.themeBox.left = Math.max(0, Math.floor((app.width - outerW) / 2))
+    this.themeBox.top = Math.max(0, Math.floor((app.height - totalH) / 2))
+    this.themeBox.visible = true
+  }
+
   private renderThreadList(): void {
     const app = this.app
     if (!app.threadList) {
@@ -1272,6 +1373,17 @@ function truncateChunkList(chunks: TextChunk[], w: number): TextChunk[] {
 /** Truncate to `w` without padding — for rows that need no background fill. */
 function clampRow(row: TextChunk[], w: number): TextChunk[] {
   return chunksWidth(row) > w ? truncateChunkList(row, w) : row
+}
+
+/**
+ * swatch renders a few of a theme's colors as solid blocks.
+ *
+ * Foregrounds, not the diff backgrounds: the washes are nearly the terminal's
+ * own color by design, so painted as two-column blocks they all look like the
+ * same dark rectangle and say nothing.
+ */
+function swatch(...hexes: string[]): TextChunk[] {
+  return hexes.map((hex) => chunk('██', { fg: RGBA.fromHex(hex) }))
 }
 
 /** Cells reserved for a tree row's folder glyph, so names align under each other. */

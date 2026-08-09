@@ -15,6 +15,7 @@ import type { CliRenderer, KeyEvent } from '@opentui/core'
 import { App, Focus, ModalMode, ViewMode } from './app.ts'
 import { flatten } from './tree.ts'
 import { keyString } from './keys.ts'
+import { BUILTIN_THEMES } from './theme.ts'
 import { openEditor, openLazygit } from './externals.ts'
 import { toggleFullStage, toggleStaged } from './staging.ts'
 import { handleFinderKey, openFinder } from './finder.ts'
@@ -60,6 +61,7 @@ function route(app: App, renderer: CliRenderer, key: string): boolean {
   // Overlays get first refusal, outermost first, so their keys never leak into
   // whatever is behind them.
   if (app.quitConfirm) return handleQuitConfirmKey(app, renderer, key)
+  if (app.themePicker) return handleThemePickerKey(app, key)
   if (app.help) return handleHelpKey(app, key)
   if (app.modal) return handleModalKey(app, key)
   if (app.threadList) return handleThreadListKey(app, key)
@@ -107,6 +109,11 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
       // The keymap used to live in a permanent footer. Moving it here gives the
       // diff that row back; the header advertises the key so it stays findable.
       app.help = { scrollY: 0, bodyHeight: 0 }
+      return true
+    case 't':
+      // Opens on the palette in force, so ↑↓ moves away from where you are
+      // rather than from the top of a list.
+      app.themePicker = { cursor: app.themeIndex(), original: app.themeName }
       return true
     case 'b':
       // Toggle tree auto-hide: when on, the tree pane hides while content has
@@ -188,6 +195,43 @@ function handleHelpKey(app: App, key: string): boolean {
       return true
     default:
       // Swallow everything else: the overlay is modal.
+      return true
+  }
+}
+
+/**
+ * handleThemePickerKey drives the theme overlay.
+ *
+ * Moving the cursor applies the palette immediately: the panes are still on
+ * screen behind the box, so the preview IS the answer to "does this theme work
+ * for reading a diff". enter keeps it (and writes state.json), esc puts the
+ * original back — which is why it is a real undo and not just a close.
+ */
+function handleThemePickerKey(app: App, key: string): boolean {
+  const picker = app.themePicker
+  if (!picker) return false
+  const n = BUILTIN_THEMES.length
+  switch (key) {
+    case 'up':
+      picker.cursor = (picker.cursor - 1 + n) % n
+      app.setTheme(BUILTIN_THEMES[picker.cursor]!.name)
+      return true
+    case 'down':
+      picker.cursor = (picker.cursor + 1) % n
+      app.setTheme(BUILTIN_THEMES[picker.cursor]!.name)
+      return true
+    case 'enter':
+      app.chooseTheme(BUILTIN_THEMES[picker.cursor]!.name)
+      app.themePicker = null
+      return true
+    case 'esc':
+    case 'q':
+    case 't':
+      app.setTheme(picker.original)
+      app.themePicker = null
+      return true
+    default:
+      // Modal: swallow everything else.
       return true
   }
 }
