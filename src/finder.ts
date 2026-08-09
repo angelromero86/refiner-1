@@ -86,13 +86,9 @@ export function pickFinderResult(app: App): void {
   const picked = app.files[fileIdx]
   closeFinder(app)
 
-  for (let i = 0; i < app.flat.length; i++) {
-    const n = app.flat[i].node
-    if (n.type === 'file' && n.path === picked.path) {
-      app.cursor = i
-      break
-    }
-  }
+  // Opens the folders on the way down, so picking a file out of a folded tree
+  // leaves the tree showing where you landed rather than where you were.
+  app.revealPath(picked.path)
   app.selectedPath = picked.path
   app.contentCursor = 0
   app.contentScroll = 0

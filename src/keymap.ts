@@ -38,7 +38,7 @@ export const KEYMAP: readonly KeySection[] = [
         what: 'switch between CHANGES and ALL — ALL lists the whole repo, so you can read and comment on files nobody has touched',
       },
       { keys: 'space', what: 'stage or unstage the whole file' },
-      { keys: 'p', what: 'fuzzy file finder — space-separated terms, order-independent' },
+      { keys: 'p / ⌃p', what: 'fuzzy file finder — space-separated terms, order-independent' },
     ],
   },
   {

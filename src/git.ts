@@ -43,6 +43,18 @@ export function fullyStaged(f: ChangedFile): boolean {
   return f.indexCode !== ' ' && f.indexCode !== '?' && (f.workCode === ' ' || f.workCode === '')
 }
 
+/**
+ * hasUnstagedChanges reports whether part of the file is still outside the index
+ * — "Y is dirty" in porcelain, which covers an untracked file (`??`) as well.
+ *
+ * It is NOT the negation of `fullyStaged`: an UNCHANGED file (ALL mode's `'  '`)
+ * is neither, and conflating the two is what made every folder in the repo read
+ * as work outstanding.
+ */
+export function hasUnstagedChanges(f: ChangedFile): boolean {
+  return f.workCode !== ' ' && f.workCode !== ''
+}
+
 export enum Mode {
   Uncommitted,
   Review,

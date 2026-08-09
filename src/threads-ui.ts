@@ -134,6 +134,7 @@ export function jumpToThread(app: App, t: StoredThread): void {
   const file = app.findFile(t.file)
   if (!file) return
   app.selectedPath = t.file
+  app.revealPath(t.file)
   app.pendingNavLine = t.range.start
   app.focus = Focus.Content
   if (app.cache.has(app.selectedPath)) {

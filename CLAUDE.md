@@ -356,6 +356,35 @@ The diff pane still drops its cursor row and selection when idle
 the tree's treatment means an idle variant of every `CursorRowStyles` set, which is
 a bigger change than it looks.
 
+**A folder's name is colored by what it owes; its glyph is not.** The icon keeps
+the accent in every state — it is what says "folder" at a glance, and a tree
+whose shape changes color as you stage is harder to read, not easier. The NAME
+is the variable, and `dirState` (`src/tree.ts`) spends it on the work left under
+the folder: `dir` while any descendant is unstaged, `dirStaged` once
+everything that changed is in the index, and plain `text` — the file style —
+when nothing under it changed at all. The distinction that makes it work is
+`hasUnstagedChanges` vs `!fullyStaged`: they differ precisely on an UNCHANGED
+file, which only ALL mode produces, and treating those as "not staged yet" is
+what used to paint every folder in the repo as if it needed attention. Same
+reason the walk reads `child.file` instead of `App.findFile(child.path)` — that
+lookup is a linear scan over every file in the repo, once per descendant, on
+every frame. `test/tree.test.ts` pins the three states.
+
+**Every jump that moves the diff pane goes through `revealPath`.** The mode
+toggle, the finder (`⌃p`) and `jumpToThread` all point the right pane at a file
+without the tree cursor having walked there, and each one used to park the
+cursor only *if the row happened to be visible* — which in ALL mode it usually
+is not, because entering ALL folds the repo down to its folders. So the tree
+kept pointing at where you were while the diff showed where you went.
+`App.revealPath` opens the folders on the way down, re-flattens, and parks the
+cursor; the pane scrolls because its window is derived from the cursor. Two
+things it must keep: only the ancestors open (revealing a file is not a back
+door to expanding the repo), and the caller must be past its generation guard,
+because `collapsed` answers for whatever mode is active when it runs — the same
+trap `collapseAllButPath` documents. A file the target mode doesn't list is not
+a case to fix here: `toggleFileMode` clears the selection first, and
+`revealPath('')` is a no-op.
+
 **The scrollbar column only exists when it can scroll.** `buildContent` reserves
 the last column for it when `activeRowCount() > h` and hands it to the code
 otherwise — a diff that fits shows its change bands as the diff itself, so the

@@ -1,6 +1,6 @@
 /** File-tree construction and flattening for the left pane. */
 
-import type { ChangedFile } from './git.ts'
+import { fullyStaged, hasUnstagedChanges, type ChangedFile } from './git.ts'
 
 export interface DirNode {
   type: 'dir'
@@ -23,6 +23,45 @@ export interface FlatNode {
   depth: number
   /** Pre-built tree-guide prefix ("│ ", "├ ", "└ ", "  "). */
   prefix: string
+}
+
+/** What a directory owes the reviewer. See `dirState`. */
+export enum DirState {
+  Clean,
+  Staged,
+  Unstaged,
+}
+
+/**
+ * dirState summarizes a directory by the work still owed under it:
+ *
+ *   Unstaged → some descendant has changes that are not in the index
+ *   Staged   → everything that changed under it is in the index
+ *   Clean    → nothing under it changed at all
+ *
+ * The tree colors the folder name from this, so the three have to be about the
+ * CHANGES under a directory and not about its files. In ALL mode a directory
+ * holds mostly unchanged files, and treating those as "not staged yet" is what
+ * used to paint every folder in the repo as if it needed attention.
+ *
+ * It reads `child.file` rather than looking the path up in `App.files`: the tree
+ * is rebuilt from that array in the same breath (`loadFiles`), so it holds the
+ * very same objects — and the lookup is a linear scan, which under ALL mode's
+ * thousands of files made this walk quadratic on every frame.
+ */
+export function dirState(d: DirNode): DirState {
+  let staged = false
+  for (const child of d.children) {
+    if (child.type === 'file') {
+      if (hasUnstagedChanges(child.file)) return DirState.Unstaged
+      if (fullyStaged(child.file)) staged = true
+    } else {
+      const sub = dirState(child)
+      if (sub === DirState.Unstaged) return DirState.Unstaged
+      if (sub === DirState.Staged) staged = true
+    }
+  }
+  return staged ? DirState.Staged : DirState.Clean
 }
 
 export function build(files: ChangedFile[]): Node[] {

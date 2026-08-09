@@ -520,6 +520,56 @@ test('a superseded refresh still flushes and reloads the store, but not the file
   expect(app.store.readOnly).toBe(false)
 })
 
+// ------------------------------------------- the tree follows the open file
+
+/**
+ * `revealPath` — the tree points at whatever the diff pane is showing.
+ *
+ * The fixture is the shape that made this necessary: ALL is folded down to its
+ * folders on first entry, so the row for the open file is not merely off-screen,
+ * it is not in `flat` at all. Parking the cursor "if the row is visible" — what
+ * the toggle, the finder and `jumpToThread` each used to do — is a no-op exactly
+ * then.
+ */
+test('toggling into ALL reveals the open file, opening the folders on the way', async () => {
+  const app = await opened() // CHANGES; ALL was already folded at startup
+  app.selectedPath = 'src/a.txt'
+  expect(collapsedFor(app, FileMode.All)).toEqual(['src', 'sub'])
+
+  await app.toggleFileMode() // → ALL
+
+  expect(rows(app)).toEqual(['src', 'src/a.txt', 'sub'])
+  expect(app.flat[app.cursor].node.path).toBe('src/a.txt')
+  // Only the folders on the way open. `sub` stays folded, so revealing a file is
+  // not a back door to expanding the whole repo.
+  expect(collapsedFor(app, FileMode.All)).toEqual(['sub'])
+})
+
+test('the reveal survives leaving the mode and coming back', async () => {
+  const app = await opened()
+  app.selectedPath = 'src/a.txt'
+  await app.toggleFileMode() // → ALL, opens src/
+  await app.toggleFileMode() // → CHANGES
+  await app.toggleFileMode() // → ALL again
+
+  expect(rows(app)).toEqual(['src', 'src/a.txt', 'sub'])
+  expect(app.flat[app.cursor].node.path).toBe('src/a.txt')
+})
+
+test('a file the other mode does not list leaves the tree alone', async () => {
+  const app = await opened()
+  await app.toggleFileMode() // → ALL
+  // An unchanged file: CHANGES will not list it, and the toggle drops it rather
+  // than pointing the diff pane at something the tree cannot show.
+  app.selectedPath = 'sub/b.txt'
+
+  await app.toggleFileMode() // → CHANGES
+
+  expect(app.selectedPath).toBe('')
+  expect(rows(app)).toEqual(CHANGES_TREE)
+  expect(app.cursor).toBeLessThan(app.flat.length)
+})
+
 /** Wait for a STATE, never for a duration — the outcome stays deterministic. */
 async function until(cond: () => boolean, what: string): Promise<void> {
   for (let i = 0; i < 2000; i++) {

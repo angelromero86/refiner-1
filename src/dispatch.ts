@@ -96,6 +96,10 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
       app.threadList = { cursor: 0 }
       return true
     case 'p':
+    case 'ctrl+p':
+      // ⌃p is the alias every editor trained people to reach for. It is safe to
+      // claim here because overlays get first refusal in `route()`, so it never
+      // reaches a focused text widget.
       openFinder(app)
       return true
     case 'k':

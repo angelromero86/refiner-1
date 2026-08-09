@@ -116,6 +116,8 @@ export interface Styles {
   statusR: Style
   statusUntracked: Style
 
+  /** The folder glyph. Constant across every folder state — see `dir`. */
+  dirIcon: Style
   dir: Style
   dirStaged: Style
   fileStaged: Style
@@ -295,8 +297,13 @@ function buildStyles(t: Theme): Styles {
     statusR: { fg: focus, bold: true },
     statusUntracked: { fg: primary, bold: true },
 
-    // Folders share the footer's accent + bold so they pop out of the dim tree
-    // scaffolding. Fully-staged folders flip to the staged blue.
+    // The glyph carries "this is a folder" — same accent in every state, so the
+    // shape of the tree never changes color under the reader. The NAME is styled
+    // by what is left to do under it instead: accent + bold while something down
+    // there is unstaged, the staged blue once it is all in the index, and a
+    // folder with no changes under it deliberately has no style of its own — it
+    // takes `text`, so it reads exactly like a file that nobody touched.
+    dirIcon: { fg: accent, bold: true },
     dir: { fg: accent, bold: true },
     dirStaged: { fg: stagedFg, bold: true },
     fileStaged: { fg: stagedFg },

@@ -41,7 +41,7 @@ import {
 } from './render.ts'
 import { chunk, S, statusStyle, withBg, type Style } from './styles.ts'
 import { truncate, width as textWidth, wrapLine } from './text.ts'
-import type { FlatNode } from './tree.ts'
+import { dirState, DirState, type FlatNode } from './tree.ts'
 
 const NL: TextChunk = { __isChunk: true, text: '\n' }
 const EMPTY: TextChunk = { __isChunk: true, text: '' }
@@ -548,10 +548,21 @@ export class View {
     if (item.node.type === 'dir') {
       const dir = item.node
       const icon = app.collapsed.has(dir.path) ? app.icons.folderClosed : app.icons.folderOpen
-      let base = app.isDirFullyStaged(dir) ? S.dirStaged : S.dir
-      if (cursorHere) base = withBg(base, bg)
+      // The glyph is the constant: always the accent, in every state, because it
+      // is what says "folder" at a glance. The NAME is the variable, and what it
+      // varies with is the work left under it — accent while anything down there
+      // is unstaged, the staged tone once it is all in the index, and the plain
+      // file color otherwise. That last case is most of ALL mode, where the whole
+      // repo used to shout for attention.
+      const state = dirState(dir)
+      let base = state === DirState.Unstaged ? S.dir : state === DirState.Staged ? S.dirStaged : S.text
+      let iconStyle = S.dirIcon
+      if (cursorHere) {
+        base = withBg(base, bg)
+        iconStyle = withBg(iconStyle, bg)
+      }
       return pinRight(
-        [chunk(item.prefix, guideStyle), chunk(`${iconCell(icon)} ${dir.name}/`, base)],
+        [chunk(item.prefix, guideStyle), chunk(`${iconCell(icon)} `, iconStyle), chunk(`${dir.name}/`, base)],
         // Directories have no badge, but they still yield the channel so a long
         // folder name can't run through the column the statuses live in.
         [chunk(' '.repeat(TREE_GUTTER_W), padStyle)],

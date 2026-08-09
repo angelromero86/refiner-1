@@ -31,8 +31,18 @@ filas.
 
 En el árbol, `●` marca los ficheros con threads y la última columna es el badge de
 estado de git (`M`, `A`, `D`, `R`, `C`, `?`…); las carpetas llevan un glifo de Nerd
-Font configurable (aquí dibujado como `▾`). En el diff, las dos columnas de números
-son la línea antigua y la nueva — un `+` o un `-` ocupa la que falta — y la columna
+Font configurable (aquí dibujado como `▾`), siempre en el color de acento. El
+**nombre** de la carpeta, en cambio, se colorea por lo que queda pendiente debajo:
+acento mientras algo de su subárbol esté sin stagear, el azul de *staged* cuando
+todo lo que cambió ya está en el índice, y como un fichero cualquiera si ahí abajo
+no ha cambiado nada.
+
+El árbol sigue al fichero abierto: cambiar de modo (`tab`), elegir un fichero en el
+buscador (`⌃p`) o saltar a un thread abren las carpetas que hagan falta y dejan el
+cursor encima. Si el otro modo no lista ese fichero — un fichero sin cambios al
+volver a CHANGES — la selección se suelta y el árbol se queda como estaba.
+
+En el diff, las dos columnas de números son la línea antigua y la nueva — un `+` o un `-` ocupa la que falta — y la columna
 de la derecha del todo es el minimapa.
 
 Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
@@ -58,7 +68,7 @@ Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
   líneas cambiadas, centrándolo en el panel.
 - **Minimapa** — banda de color por zona del archivo (thread > staged > del > add)
   más el thumb del viewport, en la columna derecha del panel.
-- **Fuzzy finder** — `p` abre un picker multi-término: `con task` encuentra
+- **Fuzzy finder** — `p` (o `⌃p`) abre un picker multi-término: `con task` encuentra
   `Controllers/Task.ts`.
 - **Tema configurable** — paleta semántica + colores de sintaxis en
   `~/.config/refiner/config.toml`.
@@ -200,7 +210,7 @@ orden. La fuente de verdad es [`src/keymap.ts`](src/keymap.ts).
 | `enter` | Expandir o plegar una carpeta · enfocar el diff en un fichero |
 | `tab` | Cambiar entre CHANGES y ALL — ALL lista todo el repo, para poder leer y comentar ficheros que nadie ha tocado |
 | `space` | Stage / unstage del fichero entero |
-| `p` | Fuzzy finder de ficheros — términos separados por espacios, sin importar el orden |
+| `p` · `⌃p` | Fuzzy finder de ficheros — términos separados por espacios, sin importar el orden |
 
 **Diff**
 

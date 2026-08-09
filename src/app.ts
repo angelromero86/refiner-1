@@ -44,7 +44,7 @@ import {
   type ChangedFile,
   type Source,
 } from './git.ts'
-import { build as buildTree, flatten, type DirNode, type FlatNode, type Node } from './tree.ts'
+import { build as buildTree, flatten, type FlatNode, type Node } from './tree.ts'
 import { Store, type StoredThread } from './comments.ts'
 import { highlightDiff, NO_HIGHLIGHTS, type DiffHighlights } from './syntax.ts'
 import { defaultUIState, loadState, saveState } from './state.ts'
@@ -165,7 +165,6 @@ export type StagingJob =
 
 /** Shared empty result for `stagedFor`, so the hot render path allocates nothing. */
 const EMPTY_STAGED: ReadonlySet<number> = new Set<number>()
-
 
 /** The FSM state of the thread modal. */
 export enum ModalMode {
@@ -861,7 +860,9 @@ export class App {
     // later toggle. Its own epilogue will do this for its own tree.
     if (gen !== this.loadGen) return
     if (this.cursor >= this.flat.length) this.cursor = Math.max(0, this.flat.length - 1)
-    this.syncCursorToSelection()
+    // Past the guard, so `collapsed` is this tree's own set: the file carried
+    // across the toggle is opened up and pointed at in the mode we landed in.
+    this.revealPath(this.selectedPath)
     this.render()
   }
 
@@ -887,10 +888,35 @@ export class App {
     for (let i = 1; i < parts.length; i++) collapsed.delete(parts.slice(0, i).join('/'))
   }
 
-  /** Park the tree cursor on the selected file, if it is visible. */
-  syncCursorToSelection(): void {
-    if (this.selectedPath === '') return
-    const i = this.flat.findIndex((f) => f.node.type === 'file' && f.node.path === this.selectedPath)
+  /**
+   * revealPath opens the folders on the way to `path` and parks the tree cursor
+   * on it, so the file in the diff pane is also the file the tree is pointing at.
+   * The pane scrolls to follow, because its window is derived from the cursor.
+   *
+   * Every jump that moves the diff pane WITHOUT walking the tree calls this: the
+   * mode toggle, the finder, a thread. Each one leaves the cursor wherever it
+   * was, and the row it should be on is routinely folded away inside a collapsed
+   * folder — most of ALL mode is collapsed by construction. Merely parking the
+   * cursor "if the row happens to be visible" is what those callers used to do,
+   * and it silently did nothing in exactly that case.
+   *
+   * Opening folders is a deliberate side effect on the collapse set, and it
+   * survives: coming back to a mode leaves it showing the file you left on.
+   *
+   * `collapsed` answers for whatever mode is active when it runs (see
+   * `collapseAllButPath`), so a caller inside an overlapping load must be past
+   * its generation guard before calling this — the tree and the set have to be
+   * the same mode's.
+   */
+  revealPath(path: string): void {
+    if (path === '') return
+    const parts = path.split('/')
+    let opened = false
+    for (let i = 1; i < parts.length; i++) {
+      if (this.collapsed.delete(parts.slice(0, i).join('/'))) opened = true
+    }
+    if (opened) this.flat = flatten(this.nodes, this.collapsed)
+    const i = this.flat.findIndex((f) => f.node.type === 'file' && f.node.path === path)
     if (i >= 0) this.cursor = i
   }
 
@@ -1091,31 +1117,6 @@ export class App {
   isFileFullyStaged(path: string): boolean {
     const f = this.findFile(path)
     return f ? fullyStaged(f) : false
-  }
-
-  /**
-   * isDirFullyStaged is true when the dir holds at least one file and every
-   * descendant file is fully staged. Empty subdirs don't disqualify it.
-   */
-  isDirFullyStaged(d: DirNode): boolean {
-    const { total, staged } = this.dirFileStats(d)
-    return total > 0 && total === staged
-  }
-
-  private dirFileStats(d: DirNode): { total: number; staged: number } {
-    let total = 0
-    let staged = 0
-    for (const child of d.children) {
-      if (child.type === 'file') {
-        total++
-        if (this.isFileFullyStaged(child.path)) staged++
-      } else {
-        const sub = this.dirFileStats(child)
-        total += sub.total
-        staged += sub.staged
-      }
-    }
-    return { total, staged }
   }
 
   /** How many files have all their changes in the index (header label). */
