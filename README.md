@@ -82,12 +82,31 @@ bun run src/index.ts     # o: bun start
 ### Binario compilado
 
 Para usarlo desde cualquier sitio, compila un binario único (no necesita Bun ni
-`node_modules` en la máquina destino):
+`node_modules` en la máquina destino) e instálalo:
 
 ```bash
-bun run build            # → dist/refiner (~66 MB) + dist/refiner-assets/ (~3.6 MB)
-cp -R dist/refiner dist/refiner-assets ~/.local/bin/
+bun run install-local              # compila e instala en ~/.local
+bun run install-local --no-build   # instala lo que ya haya en dist/
+bun run install-local --prefix /opt/refiner
+bun run install-local --uninstall  # quitarlo
 ```
+
+El layout es *payload + enlace*: el binario y `refiner-assets/` van juntos a
+`~/.local/share/refiner/`, y `~/.local/bin/refiner` es un symlink al binario. Eso
+deja 130 MB fuera del directorio que está en el PATH y sigue funcionando porque un
+binario compilado de Bun resuelve `process.execPath` **a través del symlink** hasta
+su ruta real, que es justo donde están los assets.
+
+El script reemplaza el directorio de assets en vez de copiarlo encima (si no, se
+anida dentro de sí mismo y arrastra ficheros del build anterior), renombra el
+binario en lugar de escribir sobre él (`ETXTBSY` si lo estás ejecutando), comprueba
+que el sidecar está completo antes y después de copiar, y arranca `refiner --help`
+por el symlink para verificarlo. Nunca borra lo que no ha creado él: un `refiner`
+que sea un fichero real, o un symlink a otro sitio, se reporta y se planta
+(`--force` solo repunta el symlink).
+
+Si prefieres hacerlo a mano, `bun run build` deja `dist/refiner` (~130 MB) y
+`dist/refiner-assets/` (~3.7 MB).
 
 **Copia las dos cosas.** El binario lleva dentro el renderer nativo, pero el worker
 de tree-sitter no puede arrancar desde el filesystem virtual de Bun, así que la
@@ -496,6 +515,7 @@ Las mismas skills sirven si usas la extensión de VSCode: el store es el mismo.
 bun test           # tests unitarios + integración contra git real
 bun run typecheck  # tsc --noEmit
 bun run build      # dist/refiner + dist/refiner-assets/
+bun run install-local  # lo anterior + instalarlo en ~/.local
 bun start          # = bun run src/index.ts
 ```
 

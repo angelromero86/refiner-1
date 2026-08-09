@@ -13,6 +13,7 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "bun run scripts/build.ts",
+    "install-local": "bun run scripts/install.ts",
     "install-skills": "bun run scripts/install-skills.ts"
   },
   "dependencies": {

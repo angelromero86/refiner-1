@@ -45,4 +45,6 @@ await cp(join(root, 'assets', PARSER_DIR_NAME), join(assetsDir, PARSER_DIR_NAME)
 const size = (await Bun.file(binary).stat()).size
 console.log(`\ndist/refiner            ${(size / 1024 / 1024).toFixed(1)} MB`)
 console.log(`dist/${ASSET_DIR_NAME}/     tree-sitter runtime + grammars (bundled and vendored)`)
-console.log(`\nInstall both together, e.g.:\n  cp -R dist/refiner dist/${ASSET_DIR_NAME} ~/.local/bin/`)
+// Never the binary on its own: `scripts/install.ts` is what puts the two in the
+// one layout where a compiled binary can still find its parsers.
+console.log(`\nInstall both together:\n  bun run install-local`)
