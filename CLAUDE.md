@@ -200,6 +200,27 @@ markdown used to look unhighlighted; the other half was the theme having no
 `markup.*` colors at all, only the `title`/`emphasis`/`literal`/`reference`/`uri`
 names the Go original used, which no tree-sitter grammar has ever emitted.
 
+**Embedded languages are our own second pass, not a tree-sitter injection.** An
+Angular component's real content is the HTML in its `template:` string, and the
+whole thing used to render as one flat string. `findInjections` (`src/syntax.ts`)
+scans a typescript/javascript document for template literals that hold another
+language — the `template:`/`styles:` keys of `@Component`, and lit-html's `html`
+/`css` tags — highlights each with that grammar, and paints the result over a
+CLEARED span so the host's one big `string` capture doesn't show through.
+OpenTUI's client does support injections, but it picks the language off the
+captured NODE TYPE, and Angular's HTML and CSS are both a plain `template_string`
+— one mapping cannot tell them apart, which is why the scan is ours.
+
+Three things keep a wrong guess cheap. A literal is claimed only when the token
+before it says so, so a backtick the scanner doesn't model (a regex literal
+holding one) costs a missed region, never a wrong one. The `${…}` substitutions
+are held back as `holes` and keep the host's colors — they are host code, and
+lit-html templates are full of them. And a region must be TERMINATED within one
+hunk: the document is diff context rather than the file, so an unclosed template
+would otherwise swallow unrelated code pasted after it by the next hunk and paint
+it as markup. That is what `Document.gaps` is for — `documentFor` records where
+the line numbers jump, and nothing may span one.
+
 **We ship our own grammars.** @opentui/core bundles four — typescript,
 javascript, markdown, zig — so everything else fell through to flat diff colors.
 `assets/parsers/<filetype>/` adds json, toml, css, scss, html and xml as a

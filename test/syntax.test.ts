@@ -15,7 +15,7 @@
 import { expect, test, describe } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { filetypeFor, PARSER_DIR_NAME, VENDORED_FILETYPES } from '../src/syntax.ts'
+import { filetypeFor, findInjections, PARSER_DIR_NAME, VENDORED_FILETYPES } from '../src/syntax.ts'
 
 const repoRoot = join(import.meta.dir, '..')
 const parserDir = join(repoRoot, 'assets', PARSER_DIR_NAME)
@@ -94,5 +94,73 @@ describe('vendored assets', () => {
     // `parserRoot()` looks for first, so the two have to name it the same way.
     const build = await Bun.file(join(repoRoot, 'scripts/build.ts')).text()
     expect(build).toContain('PARSER_DIR_NAME')
+  })
+})
+
+/**
+ * Embedded languages — the Angular case: a TS file whose real content is the HTML
+ * in its `template:` string.
+ *
+ * The scanner is pure, so it is tested directly. What it must never do is claim a
+ * region it isn't sure about: a wrong region hands unrelated code to the HTML
+ * grammar and paints it as markup, which is worse than the flat string colour it
+ * replaced.
+ */
+describe('embedded-language regions', () => {
+  /** The regions as `filetype:<text>`, which is what the assertions care about. */
+  const found = (src: string, filetype = 'typescript', gaps: number[] = []) =>
+    findInjections(src, filetype, gaps).map((inj) => `${inj.filetype}:${src.slice(inj.start, inj.end)}`)
+
+  test('an Angular template is HTML and its styles are CSS', () => {
+    const src = ['@Component({', "  selector: 'x',", '  template: `<b>hi</b>`,', '  styles: [`.a { }`, `.b { }`],', '})'].join('\n')
+    expect(found(src)).toEqual(['html:<b>hi</b>', 'css:.a { }', 'css:.b { }'])
+  })
+
+  test('lit-html tags count too, and their substitutions are held back', () => {
+    const src = 'const t = html`<b>${name}</b>`'
+    const [inj] = findInjections(src, 'typescript')
+    expect(inj!.filetype).toBe('html')
+    expect(src.slice(inj!.start, inj!.end)).toBe('<b>${name}</b>')
+    // The hole is host code — TypeScript keeps it, the HTML grammar never sees it.
+    expect(inj!.holes.map(([s, e]) => src.slice(s, e))).toEqual(['${name}'])
+  })
+
+  test('an ordinary template literal is left alone', () => {
+    expect(found('const s = `just a <b>string</b>`')).toEqual([])
+    // Only the keys we know. A `sql:` string is not HTML because it has a key.
+    expect(found('const q = { sql: `select <1>` }')).toEqual([])
+    // The armed key applies to its own value, not to whatever follows it.
+    expect(found('const o = { template: `<b/>`, other: `<i/>` }')).toEqual(['html:<b/>'])
+  })
+
+  test('only the host grammars are scanned', () => {
+    const src = 'const t = html`<b>x</b>`'
+    expect(found(src, 'javascript')).toEqual(['html:<b>x</b>'])
+    expect(found(src, 'markdown')).toEqual([])
+    expect(found(src, 'html')).toEqual([])
+  })
+
+  test('the scan walks over strings, comments and nesting', () => {
+    // A backtick inside a comment or a string must not open a literal.
+    expect(found("// template: `<b/>`\nconst s = '`'\nconst t = { template: `<i/>` }")).toEqual(['html:<i/>'])
+    // A substitution can hold its own template literal without ending the outer one.
+    const nested = 'const t = html`<b>${ inner(`${deep}`) }</b>`'
+    expect(found(nested)).toEqual(['html:<b>${ inner(`${deep}`) }</b>'])
+    // An escaped backtick is content, not the end.
+    expect(found('const t = html`<b>a\\`b</b>`')).toEqual(['html:<b>a\\`b</b>'])
+  })
+
+  test('an unterminated literal is not a region', () => {
+    // The document is diff context, not the file, so a template that runs off the
+    // end would swallow whatever the next hunk pasted after it.
+    expect(found('const t = html`<b>hi')).toEqual([])
+  })
+
+  test('a region may not span a hunk boundary', () => {
+    const src = ['  template: `', '    <b>hi</b>', '  const other = `x`'].join('\n')
+    // Contiguous: the literal really does end on the last line.
+    expect(found(src)).toEqual(['html:\n    <b>hi</b>\n  const other = '])
+    // With line 3 opening a new hunk, those two backticks are not a pair.
+    expect(found(src, 'typescript', [src.indexOf('  const other')])).toEqual([])
   })
 })
