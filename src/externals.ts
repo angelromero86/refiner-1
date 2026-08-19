@@ -150,6 +150,33 @@ async function runExternal(
 }
 
 /**
+ * Hand `argv` the terminal in whichever of the three ways this session allows,
+ * labelling the window `title`.
+ *
+ * Every caller wants the same dance and none of them gets to choose — the branch
+ * is decided by the environment, not by what is being run — so it lives here once.
+ */
+async function runFramed(
+  app: App,
+  renderer: CliRenderer,
+  title: string,
+  argv: string[],
+): Promise<void> {
+  if (inTmux()) {
+    await runExternal(app, renderer, ['tmux', ...tmuxPopupArgs(app.popup, title), ...argv], false)
+  } else if (inZellij()) {
+    await runExternal(
+      app,
+      renderer,
+      ['zellij', ...zellijFloatingArgs(app.popup, title), ...argv],
+      false,
+    )
+  } else {
+    await runExternal(app, renderer, argv, true)
+  }
+}
+
+/**
  * What to run for `e`, and what to label the window.
  *
  * The argv path is ABSOLUTE while the title stays repo-relative, and both halves
@@ -185,28 +212,25 @@ export async function openEditor(app: App, renderer: CliRenderer): Promise<void>
     app.selectedPath,
     app.cursorLine(),
   )
-
-  if (inTmux()) {
-    await runExternal(app, renderer, ['tmux', ...tmuxPopupArgs(app.popup, title), ...argv], false)
-  } else if (inZellij()) {
-    await runExternal(app, renderer, ['zellij', ...zellijFloatingArgs(app.popup, title), ...argv], false)
-  } else {
-    await runExternal(app, renderer, argv, true)
-  }
+  await runFramed(app, renderer, title, argv)
 }
 
 /** openLazygit opens lazygit (`g`). */
 export async function openLazygit(app: App, renderer: CliRenderer): Promise<void> {
-  if (inTmux()) {
-    await runExternal(app, renderer, ['tmux', ...tmuxPopupArgs(app.popup, 'lazygit'), 'lazygit'], false)
-  } else if (inZellij()) {
-    await runExternal(
-      app,
-      renderer,
-      ['zellij', ...zellijFloatingArgs(app.popup, 'lazygit'), 'lazygit'],
-      false,
-    )
-  } else {
-    await runExternal(app, renderer, ['lazygit'], true)
-  }
+  await runFramed(app, renderer, 'lazygit', ['lazygit'])
+}
+
+/**
+ * openSerie opens serie, the commit-graph browser (`s`).
+ *
+ * No `--protocol`: serie draws its graph with a terminal image protocol, and which
+ * one works is a property of the terminal the popup lands in, not of refiner. Its
+ * own `auto` detection is the thing that knows; pinning a value here would be us
+ * guessing on its behalf and getting it wrong under any terminal but this one.
+ * Under tmux that detection needs `set -g allow-passthrough on`, and `-p
+ * kitty-unicode` is the escape hatch if a multiplexer still swallows the graph —
+ * both belong in the user's own config, not in this argv.
+ */
+export async function openSerie(app: App, renderer: CliRenderer): Promise<void> {
+  await runFramed(app, renderer, 'serie', ['serie'])
 }

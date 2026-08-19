@@ -77,6 +77,7 @@ export const KEYMAP: readonly KeySection[] = [
     bindings: [
       { keys: 'r', what: 'refresh — re-reads git and .refiner/comments.json' },
       { keys: 'g', what: 'open lazygit' },
+      { keys: 's', what: 'open serie — the commit graph' },
       { keys: 'k', what: 'this help (? works too)' },
       {
         keys: 't',

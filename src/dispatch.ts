@@ -16,7 +16,7 @@ import { App, Focus, ModalMode, ViewMode } from './app.ts'
 import { flatten } from './tree.ts'
 import { keyString } from './keys.ts'
 import { BUILTIN_THEMES } from './theme.ts'
-import { openEditor, openLazygit } from './externals.ts'
+import { openEditor, openLazygit, openSerie } from './externals.ts'
 import { toggleFullStage, toggleStaged } from './staging.ts'
 import { handleFinderKey, openFinder } from './finder.ts'
 import {
@@ -92,6 +92,9 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
       return true
     case 'g':
       void openLazygit(app, renderer)
+      return true
+    case 's':
+      void openSerie(app, renderer)
       return true
     case 'c':
       // Reachable only when no other modal is open — route() checks those first.
