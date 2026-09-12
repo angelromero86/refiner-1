@@ -72,15 +72,19 @@ export function toggleStaged(app: App): void {
   const file = app.findFile(app.selectedPath)
   if (!file) return
 
-  let [start, end] = app.selectionRange()
+  const [start, end] = app.selectionRange()
 
-  // Map the selection to unified indices. Split rows go through
-  // oldSrcIdx/newSrcIdx; current rows through cached.currentIdx.
+  // The selection is over DISPLAY rows — a card can sit inside it — so each
+  // row is mapped to its diff index first and a non-diff row is simply not
+  // stageable. Then split rows go through oldSrcIdx/newSrcIdx and current rows
+  // through cached.currentIdx, into unified index space.
   const targets = new Set<number>()
-  switch (app.effectiveViewMode()) {
-    case ViewMode.Split: {
-      end = Math.min(end, cached.split.length - 1)
-      for (let i = start; i <= end; i++) {
+  const view = app.effectiveViewMode()
+  for (let d = start; d <= end; d++) {
+    const i = app.diffIdxAt(d)
+    if (i < 0) continue
+    switch (view) {
+      case ViewMode.Split: {
         const r = cached.split[i]
         if (!r) continue
         if ((r.kind === RowKind.Del || r.kind === RowKind.Mod) && r.oldSrcIdx >= 0) {
@@ -89,24 +93,17 @@ export function toggleStaged(app: App): void {
         if ((r.kind === RowKind.Add || r.kind === RowKind.Mod) && r.newSrcIdx >= 0) {
           targets.add(r.newSrcIdx)
         }
+        break
       }
-      break
-    }
-    case ViewMode.Current: {
-      end = Math.min(end, cached.current.length - 1)
-      for (let i = start; i <= end; i++) {
+      case ViewMode.Current:
         // Only add lines are visible in current view — ctx is not stageable.
         if (cached.current[i]?.kind === LineKind.Add) targets.add(cached.currentIdx[i])
-      }
-      break
-    }
-    default: {
-      end = Math.min(end, cached.unified.length - 1)
-      for (let i = start; i <= end; i++) {
+        break
+      default: {
         const l = cached.unified[i]
         if (l && isStageable(l.kind)) targets.add(i)
+        break
       }
-      break
     }
   }
   if (targets.size === 0) return

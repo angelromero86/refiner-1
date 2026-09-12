@@ -41,6 +41,8 @@ import {
   splitSideWidth,
   type RowState,
 } from './render.ts'
+import { paintCardRow } from './card.ts'
+import type { Layout } from './rows.ts'
 import { chunk, S, statusStyle, withBg, type Style } from './styles.ts'
 import { formatStamp, truncate, width as textWidth, wrapLine } from './text.ts'
 import { dirState, DirState, type FlatNode } from './tree.ts'
@@ -664,8 +666,12 @@ export class View {
     // The scrollbar's column is reserved only when there is something to scroll.
     // A diff that fits on screen has nothing to say with it — its change bands
     // are all visible as the diff itself — so the column goes back to the code.
-    const needsScrollbar = app.activeRowCount() > h
+    // The rows counted are DISPLAY rows, cards included, and an expanded card is
+    // as tall as its text at the width it gets: hence the two layouts, the
+    // full-width one to decide and the narrower one to draw.
+    const needsScrollbar = app.layout(w).rows.length > h
     const contentW = needsScrollbar ? Math.max(1, w - 1) : w
+    const layout = app.activeLayout()
     const focused = app.focus === Focus.Content
     const [selStart, selEnd] = app.selectionRange()
     // Intent first, git second: a keypress repaints as staged in the same frame
@@ -674,46 +680,63 @@ export class View {
     // Deletions only exist in the pre-change document, additions and context in
     // the post-change one — so each row looks its runs up on the matching side.
     const hl = app.activeHighlights()
+    const view = app.effectiveViewMode()
+    const sideW = splitSideWidth(contentW)
+    const cardBg = focused ? S.palette.cursorBg : S.palette.cursorBgIdle
 
     const rows: TextChunk[][] = []
     const from = app.contentScroll
+    const end = Math.min(from + h, layout.rows.length)
+    for (let d = from; d < end; d++) {
+      const row = layout.rows[d]!
+      const isCursor = d === app.contentCursor
+      const isSelected = d >= selStart && d <= selEnd
 
-    switch (app.effectiveViewMode()) {
-      case ViewMode.Split: {
-        const end = Math.min(from + h, cached.split.length)
-        const sideW = splitSideWidth(contentW)
-        for (let i = from; i < end; i++) {
-          const row = cached.split[i]
+      if (row.kind === 'card') {
+        // A shift-selection that crosses a card reads as one block: the card's
+        // rows inside it take the selection tint too, though staging skips them.
+        // The cursor row keeps a half-weight tint while the pane is idle, the
+        // way the tree's does, so a card you were reading is still found again.
+        const line = layout.cards.get(row.threadId)?.[row.line] ?? [chunk(' '.repeat(contentW))]
+        rows.push(isCursor || (isSelected && focused) ? paintCardRow(line, cardBg) : line)
+        continue
+      }
+      if (row.kind === 'compose') {
+        rows.push(this.buildComposeRow(row, layout, contentW))
+        continue
+      }
+
+      const i = row.idx
+      switch (view) {
+        case ViewMode.Split: {
+          const r = cached.split[i]
           rows.push(
             renderSplitRow(
-              row,
+              r,
               {
-                isCursor: i === app.contentCursor,
-                isSelected: i >= selStart && i <= selEnd,
+                isCursor,
+                isSelected,
                 focused,
-                hasComment: app.lineHasThread(app.selectedPath, row.newNum),
-                oldStaged: row.oldSrcIdx >= 0 && stagedSet.has(row.oldSrcIdx),
-                newStaged: row.newSrcIdx >= 0 && stagedSet.has(row.newSrcIdx),
+                hasComment: app.lineHasThread(app.selectedPath, r.newNum),
+                oldStaged: r.oldSrcIdx >= 0 && stagedSet.has(r.oldSrcIdx),
+                newStaged: r.newSrcIdx >= 0 && stagedSet.has(r.newSrcIdx),
               } satisfies RowState,
               sideW,
               contentW,
-              hl.old.get(row.oldNum),
-              hl.new.get(row.newNum),
+              hl.old.get(r.oldNum),
+              hl.new.get(r.newNum),
             ),
           )
+          break
         }
-        break
-      }
-      case ViewMode.Current: {
-        const end = Math.min(from + h, cached.current.length)
-        for (let i = from; i < end; i++) {
+        case ViewMode.Current: {
           const line = cached.current[i]
           rows.push(
             renderCurrentRow(
               line,
               {
-                isCursor: i === app.contentCursor,
-                isSelected: i >= selStart && i <= selEnd,
+                isCursor,
+                isSelected,
                 focused,
                 hasComment: app.lineHasThread(app.selectedPath, line.newNum),
                 staged: stagedSet.has(cached.currentIdx[i]),
@@ -722,19 +745,16 @@ export class View {
               hl.new.get(line.newNum),
             ),
           )
+          break
         }
-        break
-      }
-      default: {
-        const end = Math.min(from + h, cached.unified.length)
-        for (let i = from; i < end; i++) {
+        default: {
           const line = cached.unified[i]
           rows.push(
             renderUnifiedRow(
               line,
               {
-                isCursor: i === app.contentCursor,
-                isSelected: i >= selStart && i <= selEnd,
+                isCursor,
+                isSelected,
                 focused,
                 hasComment: app.lineHasThread(app.selectedPath, line.newNum),
                 staged: stagedSet.has(i),
@@ -743,8 +763,8 @@ export class View {
               line.kind === LineKind.Del ? hl.old.get(line.oldNum) : hl.new.get(line.newNum),
             ),
           )
+          break
         }
-        break
       }
     }
 
@@ -762,6 +782,12 @@ export class View {
     }
 
     return rowsToStyledText(rows)
+  }
+
+  /** One row of the inline compose block. Placeholder until compose is wired. */
+  private buildComposeRow(row: { line: number; lines: number }, _layout: Layout, w: number): TextChunk[] {
+    void row
+    return [chunk(' '), chunk('┃', S.marker), chunk(' '.repeat(Math.max(0, w - 2)))]
   }
 
   /**
@@ -802,10 +828,11 @@ export class View {
       else if (l.kind === LineKind.Add) marks[row].add = true
     }
 
-    // The thumb maps the visible window in the ACTIVE row space (split/current
-    // rows aren't 1:1 with unified). The marks above stay keyed off `unified`
-    // because that is the canonical "where do the changes live" view.
-    const active = app.activeRowCount() || total
+    // The thumb maps the visible window in DISPLAY row space — the rows the
+    // cursor and the scroll actually range over, cards included. The marks
+    // above stay keyed off `unified` because that is the canonical "where do
+    // the changes live" view.
+    const active = app.displayRowCount() || total
     const vpStart = Math.floor((app.contentScroll * h) / active)
     let vpEnd = Math.floor(((app.contentScroll + h) * h) / active)
     if (vpEnd <= vpStart) vpEnd = vpStart + 1

@@ -96,8 +96,9 @@ export function openOrCreateThread(app: App): void {
   }
 
   // Compose a new thread over the selection — collect the working-tree line
-  // bounds it spans.
-  let [selStart, selEnd] = app.selectionRange()
+  // bounds it spans. The selection is over display rows; card rows inside it
+  // carry no line and are skipped.
+  const [selStart, selEnd] = app.selectionRange()
   let start = 0
   let end = 0
   const collect = (newNum: number) => {
@@ -105,20 +106,21 @@ export function openOrCreateThread(app: App): void {
     if (start === 0 || newNum < start) start = newNum
     if (newNum > end) end = newNum
   }
-
-  switch (app.effectiveViewMode()) {
-    case ViewMode.Split:
-      selEnd = Math.min(selEnd, cached.split.length - 1)
-      for (let i = selStart; i <= selEnd; i++) collect(cached.split[i]?.newNum ?? 0)
-      break
-    case ViewMode.Current:
-      selEnd = Math.min(selEnd, cached.current.length - 1)
-      for (let i = selStart; i <= selEnd; i++) collect(cached.current[i]?.newNum ?? 0)
-      break
-    default:
-      selEnd = Math.min(selEnd, cached.unified.length - 1)
-      for (let i = selStart; i <= selEnd; i++) collect(cached.unified[i]?.newNum ?? 0)
-      break
+  const view = app.effectiveViewMode()
+  for (let d = selStart; d <= selEnd; d++) {
+    const i = app.diffIdxAt(d)
+    if (i < 0) continue
+    switch (view) {
+      case ViewMode.Split:
+        collect(cached.split[i]?.newNum ?? 0)
+        break
+      case ViewMode.Current:
+        collect(cached.current[i]?.newNum ?? 0)
+        break
+      default:
+        collect(cached.unified[i]?.newNum ?? 0)
+        break
+    }
   }
   if (start === 0) return
   // Opening an existing thread above stays allowed; only composing a new one is

@@ -56,8 +56,11 @@ function shutdown(renderer: CliRenderer): void {
   process.exit(0)
 }
 
-/** route returns true when refiner claimed the key. */
-function route(app: App, renderer: CliRenderer, key: string): boolean {
+/**
+ * route returns true when refiner claimed the key. Exported for tests, which
+ * drive the app through it with the normalized key strings.
+ */
+export function route(app: App, renderer: CliRenderer, key: string): boolean {
   // Overlays get first refusal, outermost first, so their keys never leak into
   // whatever is behind them.
   if (app.quitConfirm) return handleQuitConfirmKey(app, renderer, key)
@@ -318,7 +321,9 @@ function activateCursor(app: App): void {
 }
 
 function handleContentKey(app: App, renderer: CliRenderer, key: string): boolean {
-  const n = app.activeRowCount()
+  // Display rows: the diff plus every card row, which the cursor walks like
+  // any other row.
+  const n = app.displayRowCount()
   const h = app.paneInnerHeight()
 
   switch (key) {

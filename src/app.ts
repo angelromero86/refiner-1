@@ -7,6 +7,9 @@
  * mutable object whose methods mutate in place and then call `render()`. The
  * state fields and their invariants are otherwise unchanged:
  *
+ *   - contentCursor, contentScroll and selectionAnchor index the DISPLAY rows
+ *     (`src/rows.ts`): the active diff with the thread cards spliced in.
+ *     Staging and hunks map back to the diff through `diffIdxAt`.
  *   - selectionAnchor === -1 means "no shift-selection active"; otherwise the
  *     selection runs between selectionAnchor and contentCursor (inclusive).
  *   - cache, staged, loadingDiff and collapsed are all keyed by file path.
@@ -65,7 +68,7 @@ import {
   type ThemeOverrides,
 } from './theme.ts'
 import { applyTheme } from './styles.ts'
-import { buildLayout, type Layout } from './rows.ts'
+import { buildLayout, type DisplayRow, type Layout } from './rows.ts'
 
 export enum Focus {
   Tree,
@@ -280,6 +283,16 @@ export interface TextInputs {
   setComposeValue(v: string): void
   finderValue(): string
   setFinderValue(v: string): void
+}
+
+/** See `App.cursorIdentity`. */
+export interface CursorIdentity {
+  /** The diff row under (or last above) the cursor; -1 when there is none. */
+  diffIdx: number
+  /** The card the cursor was on, or ''. */
+  threadId: string
+  /** The line within that card (or compose block). */
+  line: number
 }
 
 const NO_INPUTS: TextInputs = {
@@ -835,10 +848,7 @@ export class App {
       // to the new row count and drop a stale selection.
       if (file.path === this.selectedPath) {
         if (this.pendingNavLine > 0) this.navigateToPendingLine()
-        if (this.selectionAnchor >= this.activeRowCount()) this.selectionAnchor = -1
-        if (this.contentCursor >= this.activeRowCount()) {
-          this.contentCursor = Math.max(0, this.activeRowCount() - 1)
-        }
+        this.clampCursor()
         this.ensureCursorVisible()
       }
     } catch (err) {
@@ -1066,7 +1076,7 @@ export class App {
     if (i >= 0) this.cursor = i
   }
 
-  /** Inclusive [start, end] over rows in the active diff. */
+  /** Inclusive [start, end] over DISPLAY rows; consumers skip the non-diff ones. */
   selectionRange(): [number, number] {
     if (this.selectionAnchor < 0) return [this.contentCursor, this.contentCursor]
     return this.selectionAnchor <= this.contentCursor
@@ -1078,7 +1088,11 @@ export class App {
     return this.selectionAnchor >= 0 && this.selectionAnchor !== this.contentCursor
   }
 
-  /** Row count of the currently displayed diff; 0 when nothing is loaded. */
+  /**
+   * Row count of the active DIFF array — not what the cursor ranges over. The
+   * minimap keys its marks off it; everything cursor-shaped wants
+   * `displayRowCount()`.
+   */
   activeRowCount(): number {
     const cached = this.cache.get(this.selectedPath)
     if (!cached) return 0
@@ -1090,6 +1104,97 @@ export class App {
       default:
         return cached.unified.length
     }
+  }
+
+  /** How many rows the cursor can stand on: diff rows plus card and compose rows. */
+  displayRowCount(): number {
+    return this.activeLayout().rows.length
+  }
+
+  /** The active diff idx under display row `d`, or -1 on a card or compose row. */
+  diffIdxAt(d: number): number {
+    const row = this.activeLayout().rows[d]
+    return row?.kind === 'diff' ? row.idx : -1
+  }
+
+  /** Display idx of active diff row `idx`, or -1 when out of range. */
+  displayIdxOfDiff(idx: number): number {
+    return this.activeLayout().diffToDisplay[idx] ?? -1
+  }
+
+  cursorRow(): DisplayRow | null {
+    return this.activeLayout().rows[this.contentCursor] ?? null
+  }
+
+  /** The thread whose card the cursor is on (any of its rows), or null. */
+  threadAtCursor(): StoredThread | null {
+    const row = this.cursorRow()
+    if (row?.kind !== 'card') return null
+    const i = this.store.indexOfThread(row.threadId)
+    return i >= 0 ? this.store.threads[i] : null
+  }
+
+  /** Display idx of a thread's card header, or -1 when it is not in this file's layout. */
+  cardStartOf(threadId: string): number {
+    return this.activeLayout().cardStart.get(threadId) ?? -1
+  }
+
+  /** Keep the cursor and the selection inside the rows that exist. */
+  clampCursor(): void {
+    const n = this.displayRowCount()
+    if (this.selectionAnchor >= n) this.selectionAnchor = -1
+    if (this.contentCursor >= n) this.contentCursor = Math.max(0, n - 1)
+    if (this.contentCursor < 0) this.contentCursor = 0
+  }
+
+  /**
+   * What the cursor is on, in terms that survive a layout change: the card
+   * (by thread id) and the line within it, or the diff row. Both are kept for
+   * a card row, so a card that vanishes — its thread deleted — drops the
+   * cursor onto the code it sat under.
+   */
+  cursorIdentity(): CursorIdentity {
+    const rows = this.activeLayout().rows
+    const row = rows[this.contentCursor]
+    if (!row) return { diffIdx: -1, threadId: '', line: 0 }
+    if (row.kind === 'diff') return { diffIdx: row.idx, threadId: '', line: 0 }
+    let diffIdx = -1
+    for (let d = this.contentCursor; d >= 0; d--) {
+      const r = rows[d]!
+      if (r.kind === 'diff') {
+        diffIdx = r.idx
+        break
+      }
+    }
+    return { diffIdx, threadId: row.kind === 'card' ? row.threadId : '', line: row.line }
+  }
+
+  /** Put the cursor back on what `cursorIdentity()` described, in the layout as it is now. */
+  restoreCursor(id: CursorIdentity): void {
+    const start = id.threadId === '' ? -1 : this.cardStartOf(id.threadId)
+    if (start >= 0) {
+      const row = this.activeLayout().rows[start]
+      const lines = row?.kind === 'card' ? row.lines : 1
+      this.contentCursor = start + Math.min(id.line, lines - 1)
+    } else if (id.diffIdx >= 0) {
+      const d = this.displayIdxOfDiff(id.diffIdx)
+      if (d >= 0) this.contentCursor = d
+    }
+    this.clampCursor()
+    this.ensureCursorVisible()
+  }
+
+  /**
+   * withStableCursor runs a mutation that changes the rows — a reply, a card
+   * expanded, a thread relocated — and keeps the cursor on the same thing
+   * rather than the same index. It bumps `threadsEpoch` itself, so a caller
+   * cannot mutate and forget to invalidate the layout.
+   */
+  withStableCursor(fn: () => void): void {
+    const id = this.cursorIdentity()
+    fn()
+    this.threadsEpoch++
+    this.restoreCursor(id)
   }
 
   /**
@@ -1121,7 +1226,9 @@ export class App {
    * does nothing. A file with no changes has no hunks and this is a no-op.
    */
   jumpToHunk(delta: 1 | -1): void {
-    const starts = hunkStarts(this.changedRowFlags())
+    // Found in diff space, compared and landed in display space: the cursor
+    // may be standing on a card between two hunks.
+    const starts = hunkStarts(this.changedRowFlags()).map((i) => this.displayIdxOfDiff(i))
     if (starts.length === 0) return
 
     let target: number
@@ -1144,17 +1251,31 @@ export class App {
     return hunkStarts(this.changedRowFlags()).length
   }
 
-  /** The working-tree line number the content cursor currently sits on. */
+  /**
+   * The working-tree line number the content cursor sits on: the row's
+   * `newNum`, or the thread's last line on a card row, or the anchor's last
+   * line on a compose row.
+   */
   cursorLine(): number {
+    const row = this.cursorRow()
+    if (!row) return 0
+    if (row.kind === 'card') return this.threadAtCursor()?.range.end ?? 0
+    if (row.kind === 'compose') {
+      const c = this.compose
+      if (!c) return 0
+      if (c.kind === 'new') return c.end
+      const i = this.store.indexOfThread(c.threadId)
+      return i >= 0 ? this.store.threads[i].range.end : 0
+    }
     const cached = this.cache.get(this.selectedPath)
     if (!cached) return 0
     switch (this.effectiveViewMode()) {
       case ViewMode.Split:
-        return cached.split[this.contentCursor]?.newNum ?? 0
+        return cached.split[row.idx]?.newNum ?? 0
       case ViewMode.Current:
-        return cached.current[this.contentCursor]?.newNum ?? 0
+        return cached.current[row.idx]?.newNum ?? 0
       default:
-        return cached.unified[this.contentCursor]?.newNum ?? 0
+        return cached.unified[row.idx]?.newNum ?? 0
     }
   }
 
@@ -1177,7 +1298,8 @@ export class App {
           : cached.unified
     for (let i = 0; i < rows.length; i++) {
       if (rows[i].newNum === target) {
-        this.contentCursor = i
+        this.contentCursor = this.displayIdxOfDiff(i)
+        this.selectionAnchor = -1
         this.ensureCursorVisible()
         return
       }
@@ -1252,7 +1374,7 @@ export class App {
    */
   centerCursor(): void {
     const h = this.paneInnerHeight()
-    const maxScroll = Math.max(0, this.activeRowCount() - h)
+    const maxScroll = Math.max(0, this.displayRowCount() - h)
     const centered = this.contentCursor - Math.floor(h / 2)
     this.contentScroll = Math.min(maxScroll, Math.max(0, centered))
   }
@@ -1369,21 +1491,28 @@ export class App {
   contentLineLabel(): string {
     const cached = this.cache.get(this.selectedPath)
     if (!cached) return '—'
+    const row = this.cursorRow()
+    if (!row) return '—'
+    // The counts stay in diff rows: `row/total` is "where in the file", and a
+    // card is not part of the file.
+    const total = this.activeRowCount()
+    if (row.kind === 'card') return `thread · ${row.line + 1}/${row.lines}`
+    if (row.kind === 'compose') return 'compose'
     switch (this.effectiveViewMode()) {
       case ViewMode.Split: {
-        const r = cached.split[this.contentCursor]
+        const r = cached.split[row.idx]
         if (!r) return '—'
-        return formatLineLabel(r.oldNum, r.newNum, this.contentCursor + 1, cached.split.length)
+        return formatLineLabel(r.oldNum, r.newNum, row.idx + 1, total)
       }
       case ViewMode.Current: {
-        const l = cached.current[this.contentCursor]
+        const l = cached.current[row.idx]
         if (!l) return '—'
-        return formatLineLabel(l.oldNum, l.newNum, this.contentCursor + 1, cached.current.length)
+        return formatLineLabel(l.oldNum, l.newNum, row.idx + 1, total)
       }
       default: {
-        const l = cached.unified[this.contentCursor]
+        const l = cached.unified[row.idx]
         if (!l) return '—'
-        return formatLineLabel(l.oldNum, l.newNum, this.contentCursor + 1, cached.unified.length)
+        return formatLineLabel(l.oldNum, l.newNum, row.idx + 1, total)
       }
     }
   }
