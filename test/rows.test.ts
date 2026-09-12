@@ -69,19 +69,19 @@ test('collapsed, expanded and resolved cards have their own heights', () => {
   expect(kinds.filter((k) => k.startsWith('c:t-open'))).toHaveLength(2)
   expect(kinds.filter((k) => k.startsWith('c:t-done'))).toHaveLength(1)
 
-  // Expanded: header + author + 1 body row + trailing bar row.
+  // Expanded: header + 1 body row + trailing bar row.
   app.expandedThreads.add('t-open')
   app.threadsEpoch++
   kinds = rowKinds(app)
-  expect(kinds.filter((k) => k.startsWith('c:t-open'))).toHaveLength(4)
+  expect(kinds.filter((k) => k.startsWith('c:t-open'))).toHaveLength(3)
   // A resolved thread expands like any other.
   app.expandedThreads.add('t-done')
   app.threadsEpoch++
   kinds = rowKinds(app)
-  expect(kinds.filter((k) => k.startsWith('c:t-done'))).toHaveLength(4)
+  expect(kinds.filter((k) => k.startsWith('c:t-done'))).toHaveLength(3)
   // Every card row knows the card's total.
   for (const r of app.activeLayout().rows) {
-    if (r.kind === 'card') expect(r.lines).toBe(4)
+    if (r.kind === 'card') expect(r.lines).toBe(3)
   }
 })
 

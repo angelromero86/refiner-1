@@ -64,14 +64,14 @@ describe('shape', () => {
     const rows = lines(renderCard(t, opts))
     expect(rows).toHaveLength(2)
     const stamp = formatStamp(t.comments[1].createdAt)
-    expect(rows[0]).toBe(` ┃ @Claude · 2 comments · ${stamp}`.padEnd(60))
+    expect(rows[0]).toBe(` ┃ @Claude · ${stamp} · 2 comments`.padEnd(60))
     expect(rows[1]).toBe(' ┃ the reply'.padEnd(60))
   })
 
   test('the header carries the severity of the opener and no count for one comment', () => {
     const t = thread('t', 3, 4, { bodies: ['[nit] trailing space'] })
     const [head, preview] = lines(renderCard(t, opts))
-    expect(head).toMatch(/^ ┃ @someone · nit · \d{4}-/)
+    expect(head).toMatch(/^ ┃ @someone · nit · \S/)
     expect(head).not.toContain('comments')
     expect(preview.trimEnd()).toBe(' ┃ trailing space')
   })
@@ -94,13 +94,15 @@ describe('shape', () => {
   test('expanded: author rows, markdown bodies, a rule between comments, a blank bar row last', () => {
     const [t, o] = variants.expanded
     const rows = lines(renderCard(t, o))
-    expect(rows[0]).toMatch(/^ ┃ @Claude Code · must-fix · 2 comments · /)
-    expect(rows[1]).toMatch(/^ ┃ @Claude Code · \d{4}/)
-    expect(rows[2].trimEnd()).toBe(' ┃ must-fix hunkStarts ignores the last hunk.')
+    // Header, then the opener's body straight away: no second author row, and
+    // the badge is the body's, not the header's.
+    expect(rows[0]).toMatch(/^ ┃ @Claude Code · \S.* · 2 comments/)
+    expect(rows[0]).not.toContain('must-fix')
+    expect(rows[1].trimEnd()).toBe(' ┃ must-fix hunkStarts ignores the last hunk.')
     expect(rows).toContain(' ┃   return out'.padEnd(60))
     expect(rows).toContain(' ┃ • one'.padEnd(60))
     const rule = rows.indexOf(' ┃ ───'.padEnd(60))
-    expect(rule).toBeGreaterThan(2)
+    expect(rule).toBeGreaterThan(1)
     expect(rows[rule + 1]).toMatch(/^ ┃ @angel · /)
     expect(rows[rule + 2].trimEnd()).toBe(' ┃ Fixed in a follow-up.')
     expect(rows[rows.length - 1]).toBe(' ┃'.padEnd(60))

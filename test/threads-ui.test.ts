@@ -244,7 +244,7 @@ test('x resolves and folds the card; x again reopens it, still folded', async ()
   const app = await paneOn([thread('t-A', 3, 4)])
   onCard(app, 't-A')
   press(app, 'enter') // expand
-  expect(app.activeLayout().rows.filter((r) => r.kind === 'card')).toHaveLength(4)
+  expect(app.activeLayout().rows.filter((r) => r.kind === 'card')).toHaveLength(3)
   press(app, 'x')
   await settle(app)
   expect(app.store.threads[0].status).toBe('resolved')

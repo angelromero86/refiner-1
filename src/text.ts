@@ -107,10 +107,23 @@ export function wrapLine(s: string, w: number): string[] {
   return out
 }
 
-/** ISO timestamp → "YYYY-MM-DD HH:mm" in local time; the input unchanged when it won't parse. */
-export function formatStamp(iso: string): string {
+/**
+ * ISO timestamp → the shortest label that still places it: "23:25" today,
+ * "12 sep 23:25" this year, "2025-09-12" before that. Local time. The input
+ * comes back unchanged when it won't parse. Card headers spend every column
+ * on the finding, so a stamp that always carried the year truncated the rest.
+ */
+export function formatStamp(iso: string, now: Date = new Date()): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+  const hm = `${p(d.getHours())}:${p(d.getMinutes())}`
+  if (d.getFullYear() !== now.getFullYear()) {
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+  }
+  const sameDay = d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+  if (sameDay) return hm
+  return `${d.getDate()} ${MONTHS[d.getMonth()]} ${hm}`
 }
+
+const MONTHS = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']

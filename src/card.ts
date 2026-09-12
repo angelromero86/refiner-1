@@ -5,12 +5,15 @@
  * (`src/rows.ts` decides where) and the cursor walks through it row by row like
  * any other row. Three shapes:
  *
- *   collapsed      ┃ @author · must-fix · 2 comments · 2026-08-01 12:30
+ *   collapsed      ┃ @author · must-fix · 12:30 · 2 comments
  *                  ┃ first line of the LAST comment, truncated…
  *   resolved       ┃ ✓ @author · must-fix · first line of the last comment…
- *   expanded       header, then every comment — an author row, its body as
- *                  markdown, a thin rule between comments — and one blank bar
- *                  row so the next diff line does not sit flush under the text.
+ *   expanded       ┃ @author · 12:30 · 2 comments
+ *                  ┃ the opener's body as markdown (its badge leads it)
+ *                  ┃ ───
+ *                  ┃ @replier · 13:05
+ *                  ┃ their body …
+ *                  ┃                       ← one blank bar row before the code
  *
  * The header names the OPENER (whose finding this is); the preview quotes the
  * LAST comment (what is new). Every row is exactly `width` columns, measured
@@ -75,10 +78,15 @@ export function renderCard(t: StoredThread, opts: CardOptions): TextChunk[][] {
     return rows
   }
 
+  // The opener's body comes straight under the header — that row already
+  // names the author and the time, and the severity badge is the first thing
+  // the body renders. Repeating either was the first thing to go.
   const authorStyle = resolved ? S.dim : S.mode
   t.comments.forEach((c, i) => {
-    if (i > 0) rows.push(row([chunk('───', S.dim)]))
-    rows.push(row([chunk(`@${c.author}${SEP}${formatStamp(c.createdAt)}`, authorStyle)]))
+    if (i > 0) {
+      rows.push(row([chunk('───', S.dim)]))
+      rows.push(row([chunk(`@${c.author}${SEP}${formatStamp(c.createdAt)}`, authorStyle)]))
+    }
     for (const body of renderMarkdown(c.body, { width: inner, highlight: highlightBlock })) {
       rows.push([chunk(' '), chunk('┃', barStyle), chunk(' '), ...body])
     }
@@ -98,10 +106,17 @@ function header(
   const out: TextChunk[] = []
   if (resolved) out.push(chunk('✓ ', S.dim))
   out.push(chunk('@' + (opener?.author ?? ''), resolved ? S.dim : S.mode))
-  if (sev) out.push(chunk(SEP, S.dim), chunk(sev.tag, resolved ? S.dim : severityStyle(sev.tag)))
+  // Collapsed, the badge is the one thing worth scanning for and the body is
+  // hidden, so it rides the header; expanded, the body opens with it.
+  if (sev && !opts.expanded) {
+    out.push(chunk(SEP, S.dim), chunk(sev.tag, resolved ? S.dim : severityStyle(sev.tag)))
+  }
+  // Collapsed, the time of the LAST comment (what is new); expanded, the
+  // opener's, because that is whose body sits right under this row.
+  const stamped = opts.expanded ? opener : last
+  if (stamped) out.push(chunk(SEP, S.dim), chunk(formatStamp(stamped.createdAt), S.dim))
   const n = t.comments.length
   if (n > 1) out.push(chunk(SEP, S.dim), chunk(`${n} comments`, S.dim))
-  if (last) out.push(chunk(SEP, S.dim), chunk(formatStamp(last.createdAt), S.dim))
   const d = opts.drift
   if (d?.status === 'moved') out.push(chunk(SEP, S.dim), chunk(`moved from L${d.from.start}`, S.dim))
   else if (d?.status === 'lost') {
