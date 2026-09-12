@@ -84,26 +84,40 @@ export function thread(
 export interface PaneOptions {
   diff?: string
   threads?: StoredThread[]
+  /** A store to use instead of one built from `threads` (one loaded from disk). */
+  store?: Store
+  /** Further files, each with its own cached diff, after `FILE`. */
+  files?: { path: string; diff: string }[]
   width?: number
   height?: number
   /** Working-tree-vs-index status; 'M' by default so staging is allowed. */
   status?: ChangedFile['status']
 }
 
+/** Parse a diff into the cache entry the app would have built for it. */
+export function rendered(diff: string) {
+  const unified = filterContentLines(parse(diff))
+  const { out: current, idx: currentIdx } = filterCurrentView(unified)
+  return { unified, split: align(unified), current, currentIdx, createMode: null, deleteMode: null }
+}
+
 export function openPane(opts: PaneOptions = {}): App {
-  const store = new Store()
-  store.data.threads.push(...(opts.threads ?? []))
-  // `rebuildIndex` is private; adding through the public API would log ops.
-  ;(store as unknown as { rebuildIndex(): void }).rebuildIndex()
+  let store = opts.store
+  if (!store) {
+    store = new Store()
+    store.data.threads.push(...(opts.threads ?? []))
+    // `rebuildIndex` is private; adding through the public API would log ops.
+    ;(store as unknown as { rebuildIndex(): void }).rebuildIndex()
+  }
 
   const app = new App(SOURCE, store)
-  const file: ChangedFile = {
-    path: FILE,
+  const changed = (path: string): ChangedFile => ({
+    path,
     status: opts.status ?? 'M',
     indexCode: ' ',
     workCode: 'M',
-  }
-  app.files = [file]
+  })
+  app.files = [changed(FILE), ...(opts.files ?? []).map((f) => changed(f.path))]
   app.selectedPath = FILE
   app.focus = Focus.Content
   app.width = opts.width ?? 80
@@ -111,16 +125,8 @@ export function openPane(opts: PaneOptions = {}): App {
   app.treeAutoHide = true // the diff pane takes the whole width
   app.author = 'angel'
 
-  const unified = filterContentLines(parse(opts.diff ?? DEFAULT_DIFF))
-  const { out: current, idx: currentIdx } = filterCurrentView(unified)
-  app.cache.set(FILE, {
-    unified,
-    split: align(unified),
-    current,
-    currentIdx,
-    createMode: null,
-    deleteMode: null,
-  })
+  app.cache.set(FILE, rendered(opts.diff ?? DEFAULT_DIFF))
+  for (const f of opts.files ?? []) app.cache.set(f.path, rendered(f.diff))
 
   let compose = ''
   const inputs: TextInputs = {

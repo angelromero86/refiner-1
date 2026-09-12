@@ -123,6 +123,7 @@ type Op =
   | { kind: 'setBody'; threadId: string; commentId: string; body: string; prevBody: string }
   | { kind: 'setRange'; threadId: string; range: { start: number; end: number } }
   | { kind: 'setAnchor'; threadId: string; anchor: Anchor }
+  | { kind: 'setStatus'; threadId: string; status: ThreadStatus }
 
 /**
  * normalize makes parsed JSON safe to render from by MUTATING it, never by
@@ -538,6 +539,14 @@ export class Store {
           t.anchor = op.anchor
           break
         }
+        // A status flip is the reviewer's verdict and a scalar: last writer
+        // wins, and a thread gone from the base has nothing left to resolve.
+        case 'setStatus': {
+          const t = base.threads.find((x) => x.id === op.threadId)
+          if (!t) break
+          t.status = op.status
+          break
+        }
       }
     }
   }
@@ -673,6 +682,14 @@ export class Store {
     if (!t) throw new Error(`thread ${threadId} not found`)
     t.anchor = anchor
     this.pending.push({ kind: 'setAnchor', threadId, anchor })
+  }
+
+  /** setStatus resolves or reopens a thread. The reviewer's call, never an agent's. */
+  setStatus(threadId: string, status: ThreadStatus): void {
+    const t = this.data.threads.find((x) => x.id === threadId)
+    if (!t) throw new Error(`thread ${threadId} not found`)
+    t.status = status
+    this.pending.push({ kind: 'setStatus', threadId, status })
   }
 
   private makeComment(c: NewComment): StoredComment {

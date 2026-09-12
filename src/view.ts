@@ -26,7 +26,7 @@ import {
   type CliRenderer,
   type TextChunk,
 } from '@opentui/core'
-import { App, fileModeLabel, Focus, ModalMode, ViewMode, viewModeLabel } from './app.ts'
+import { App, fileModeLabel, Focus, ViewMode, viewModeLabel } from './app.ts'
 import { BUILTIN_THEMES } from './theme.ts'
 import { KEYMAP } from './keymap.ts'
 import type { StoredThread } from './comments.ts'
@@ -42,9 +42,11 @@ import {
   type RowState,
 } from './render.ts'
 import { paintCardRow } from './card.ts'
-import type { Layout } from './rows.ts'
+import { installCodeblockHighlighter } from './codeblocks.ts'
+import { firstLine } from './markdown.ts'
+import { COMPOSE_H, COMPOSE_NEW_ROWS, type Layout } from './rows.ts'
 import { chunk, S, statusStyle, withBg, type Style } from './styles.ts'
-import { formatStamp, truncate, width as textWidth, wrapLine } from './text.ts'
+import { truncate, width as textWidth, wrapLine } from './text.ts'
 import { dirState, DirState, type FlatNode } from './tree.ts'
 
 const NL: TextChunk = { __isChunk: true, text: '\n' }
@@ -81,8 +83,10 @@ const RULE_CROSS = '┼'
 
 /** Border (2) + vertical padding (2) around an overlay's content rows. */
 const OVERLAY_CHROME_H = 4
-/** Rows the compose textarea occupies. */
-const COMPOSE_H = 6
+/** Rows of chrome above the panes: header, rule, titles, rule. */
+const PANE_TOP = 4
+/** Columns a card row spends before its text: margin, bar, gap. */
+const CARD_BAR_W = 3
 
 export class View {
   private app: App
@@ -114,13 +118,15 @@ export class View {
   /** The palette generation these renderables were last painted for. */
   private themeEpoch = -1
 
-  private quitBox!: BoxRenderable
-  private quitText!: TextRenderable
+  private confirmBox!: BoxRenderable
+  private confirmText!: TextRenderable
 
-  private modalBox!: BoxRenderable
-  private modalText!: TextRenderable
+  /**
+   * The compose textarea. Not inside an overlay: it floats at an absolute
+   * position over the compose rows the layout reserves in the diff pane, so
+   * it scrolls with the diff and reads as part of it.
+   */
   private composeInput!: TextareaRenderable
-  private modalHint!: TextRenderable
 
   private listBox!: BoxRenderable
   private listText!: TextRenderable
@@ -130,15 +136,17 @@ export class View {
   private finderInput!: InputRenderable
   private finderText!: TextRenderable
 
-  /** Ids of threads whose anchor no longer exists; see refreshOutdated. */
-  private outdated = new Set<string>()
-  private overlayWasOpen = false
-
   constructor(app: App, renderer: CliRenderer) {
     this.app = app
     this.renderer = renderer
     this.build()
     app.render = () => this.render()
+    // A fenced block's colors arrive after the card was drawn plain; the
+    // layout memo keys on threadsEpoch, so bumping it is what redraws the card.
+    installCodeblockHighlighter(() => {
+      app.threadsEpoch++
+      this.render()
+    })
     app.inputs = {
       composeValue: () => this.composeInput.plainText,
       setComposeValue: (v) => this.composeInput.setText(v),
@@ -157,8 +165,7 @@ export class View {
    */
   private syncWidgetFocus(): void {
     const app = this.app
-    const wantCompose = app.modal !== null && app.modal.mode !== ModalMode.Browse
-    if (wantCompose) this.composeInput.focus()
+    if (app.compose !== null) this.composeInput.focus()
     else this.composeInput.blur()
 
     if (app.finder !== null) this.finderInput.focus()
@@ -268,21 +275,25 @@ export class View {
     root.add(subRuleBox)
     root.add(middle)
 
-    // ---- overlays -------------------------------------------------------
-    this.modalBox = this.overlayBox()
-    this.modalText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    // ---- the inline textarea ---------------------------------------------
+    // Positioned over the compose rows on every render. Its own background is
+    // the cursor tint so the box reads as a box against the pane, whether or
+    // not it has text yet; the rows underneath it carry the same tint for the
+    // frame in which it is hidden (a resize that pushed it off the pane).
     this.composeInput = new TextareaRenderable(ctx, {
       height: COMPOSE_H,
+      position: 'absolute',
+      zIndex: 50,
       placeholder: 'Write a comment… (markdown ok)',
       placeholderColor: S.palette.muted,
       textColor: S.palette.foreground,
       focusedTextColor: S.palette.foreground,
+      backgroundColor: S.palette.cursorBg,
+      focusedBackgroundColor: S.palette.cursorBg,
     })
-    this.modalHint = new TextRenderable(ctx, { content: '', height: 1, wrapMode: 'none' })
-    // Order matters: text, then the widget, then the hint underneath it.
-    this.modalBox.add(this.modalText)
-    this.modalBox.add(this.composeInput)
-    this.modalBox.add(this.modalHint)
+    this.composeInput.visible = false
+
+    // ---- overlays -------------------------------------------------------
 
     this.listBox = this.overlayBox()
     this.listText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
@@ -302,9 +313,9 @@ export class View {
     this.helpText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
     this.helpBox.add(this.helpText)
 
-    this.quitBox = this.overlayBox()
-    this.quitText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
-    this.quitBox.add(this.quitText)
+    this.confirmBox = this.overlayBox()
+    this.confirmText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
+    this.confirmBox.add(this.confirmText)
 
     this.themeBox = this.overlayBox()
     this.themeText = new TextRenderable(ctx, { content: '', wrapMode: 'none' })
@@ -323,11 +334,11 @@ export class View {
       this.render()
     })
 
-    root.add(this.modalBox)
+    root.add(this.composeInput)
     root.add(this.listBox)
     root.add(this.finderBox)
     root.add(this.helpBox)
-    root.add(this.quitBox)
+    root.add(this.confirmBox)
     root.add(this.themeBox)
   }
 
@@ -354,6 +365,8 @@ export class View {
       input.textColor = p.foreground
       input.focusedTextColor = p.foreground
     }
+    this.composeInput.backgroundColor = p.cursorBg
+    this.composeInput.focusedBackgroundColor = p.cursorBg
   }
 
   private overlayBox(): BoxRenderable {
@@ -384,12 +397,6 @@ export class View {
     const app = this.app
     if (app.width === 0 || app.height === 0) return
 
-    // The outdated check hits the filesystem, so it runs once when an overlay
-    // that shows the flag opens — never per diff row, never per frame.
-    const overlayOpen = app.modal !== null || app.threadList !== null
-    if (overlayOpen && !this.overlayWasOpen) this.refreshOutdated()
-    this.overlayWasOpen = overlayOpen
-
     if (this.themeEpoch !== app.themeEpoch) {
       this.themeEpoch = app.themeEpoch
       this.applyPalette()
@@ -397,12 +404,11 @@ export class View {
 
     this.renderHeader()
     this.renderMiddle()
-    this.renderThreadModal()
     this.renderThreadList()
     this.renderFinder()
     this.renderHelp()
     this.renderThemePicker()
-    this.renderQuitConfirm()
+    this.renderConfirm()
     this.syncWidgetFocus()
   }
 
@@ -416,10 +422,16 @@ export class View {
       chunk(' · ', S.dim),
       chunk(app.modeLabel(), S.mode),
     ]
-    // Counts threads, and now says so. This used to read "N comments" while
-    // counting threads — exactly the confusion this pass removes.
-    const n = app.store.threads.length
-    const counts = `${app.files.length} files · ${app.stagedFileCount()} staged · ${n} ${n === 1 ? 'thread' : 'threads'}`
+    // Counts threads, and says so. This used to read "N comments" while
+    // counting threads — exactly the confusion this pass removes. Once anything
+    // is resolved the count splits, because "4 threads" with three of them done
+    // overstates what is left to do.
+    const { open, resolved } = app.threadCounts()
+    const threadCount =
+      resolved > 0
+        ? `${open} open · ${resolved} resolved`
+        : `${open} ${open === 1 ? 'thread' : 'threads'}`
+    const counts = `${app.files.length} files · ${app.stagedFileCount()} staged · ${threadCount}`
     // The keymap lives behind `k` now, so the header has to advertise it — it is
     // the only thing on screen that tells you the app has more keys.
     const right: TextChunk[] = []
@@ -659,9 +671,12 @@ export class View {
 
   private buildContent(w: number, h: number): StyledText {
     const app = this.app
-    if (app.selectedPath === '') return rowsToStyledText([[]])
-    const cached = app.cache.get(app.selectedPath)
-    if (!cached) return rowsToStyledText([[chunk('Loading…', S.dim)]])
+    const cached = app.selectedPath === '' ? undefined : app.cache.get(app.selectedPath)
+    if (!cached) {
+      // No rows, so nothing for the textarea to sit over.
+      this.composeInput.visible = false
+      return rowsToStyledText([[chunk(app.selectedPath === '' ? '' : 'Loading…', S.dim)]])
+    }
 
     // The scrollbar's column is reserved only when there is something to scroll.
     // A diff that fits on screen has nothing to say with it — its change bands
@@ -702,7 +717,7 @@ export class View {
         continue
       }
       if (row.kind === 'compose') {
-        rows.push(this.buildComposeRow(row, layout, contentW))
+        rows.push(this.buildComposeRow(row, contentW))
         continue
       }
 
@@ -781,13 +796,69 @@ export class View {
       for (let i = 0; i < h; i++) rows[i].push(scrollbar[i])
     }
 
+    this.renderCompose(layout, contentW, h)
     return rowsToStyledText(rows)
   }
 
-  /** One row of the inline compose block. Placeholder until compose is wired. */
-  private buildComposeRow(row: { line: number; lines: number }, _layout: Layout, w: number): TextChunk[] {
-    void row
-    return [chunk(' '), chunk('┃', S.marker), chunk(' '.repeat(Math.max(0, w - 2)))]
+  /**
+   * One row of the inline compose block. The textarea floats over the middle
+   * rows (see `renderCompose`); what is drawn here is the bar down the left, a
+   * header for a new thread, the tinted backing under the widget and the hint
+   * row beneath it.
+   */
+  private buildComposeRow(row: { line: number; lines: number }, w: number): TextChunk[] {
+    const app = this.app
+    const bar: TextChunk[] = [chunk(' '), chunk('┃', S.marker), chunk(' ')]
+    const inner = Math.max(0, w - CARD_BAR_W)
+    const textStart = row.lines === COMPOSE_NEW_ROWS ? 1 : 0
+    if (row.line < textStart) {
+      const c = app.compose
+      const range = c ? (c.start === c.end ? `L${c.start}` : `L${c.start}-${c.end}`) : ''
+      return clampRow([...bar, chunk('New thread', S.appName), chunk(` · ${range}`, S.dim)], w)
+    }
+    if (row.line === row.lines - 1) {
+      return clampRow(
+        [
+          ...bar,
+          chunk('alt+enter', S.hotkey),
+          chunk(' save (⌃s too) · ', S.dim),
+          chunk('esc', S.hotkey),
+          chunk(' cancel', S.dim),
+        ],
+        w,
+      )
+    }
+    return [...bar, chunk(' '.repeat(inner), { bg: S.palette.cursorBg })]
+  }
+
+  /**
+   * renderCompose parks the textarea over the compose rows. The geometry is the
+   * pane's: the rows sit `PANE_TOP` under the top of the screen and one column
+   * of padding plus the card bar in from the pane's left edge. A block not
+   * wholly inside the pane — a resize shrank it — hides the widget rather than
+   * letting it hang over the title or off the bottom; the tinted rows still
+   * show where it is, and the next scroll brings it back.
+   */
+  private renderCompose(layout: Layout, contentW: number, h: number): void {
+    const app = this.app
+    const start = layout.composeStart
+    if (!app.compose || start < 0) {
+      this.composeInput.visible = false
+      return
+    }
+    const block = layout.rows[start]
+    const lines = block?.kind === 'compose' ? block.lines : 0
+    const textStart = lines === COMPOSE_NEW_ROWS ? 1 : 0
+    const first = start + textStart - app.contentScroll
+    if (start < app.contentScroll || start + lines > app.contentScroll + h) {
+      this.composeInput.visible = false
+      return
+    }
+    this.composeInput.left = app.treePanelWidth() + app.paneRuleWidth() + 1 + CARD_BAR_W
+    this.composeInput.top = PANE_TOP + first
+    this.composeInput.width = Math.max(1, contentW - CARD_BAR_W)
+    this.composeInput.height = COMPOSE_H
+    this.composeInput.visible = true
   }
 
   /**
@@ -864,201 +935,34 @@ export class View {
   // ---------------------------------------------------------------- overlays
 
   /**
-   * refreshOutdated recomputes which threads can no longer be reached from the
-   * current diff. Asynchronous and filesystem-bound, so it runs on overlay open
-   * and re-renders once the answers land.
+   * renderConfirm draws the yes/no box — "really quit?", "delete this thread?".
+   * Small and centered, with the default action spelled out rather than implied
+   * by a highlighted button — there is no pointer here, so the keys are the
+   * interface.
    */
-  private refreshOutdated(): void {
-    const threads = this.app.store.threads.slice()
-    void Promise.all(
-      threads.map(async (t) => [t.id, await this.app.isThreadOutdated(t)] as const),
-    ).then((results) => {
-      this.outdated = new Set(results.filter(([, stale]) => stale).map(([id]) => id))
-      // Only re-render if an overlay is still open; overlayWasOpen is already
-      // true by now, so this cannot loop.
-      if (this.app.modal || this.app.threadList) this.render()
-    })
-  }
-
-  private renderThreadModal(): void {
+  private renderConfirm(): void {
     const app = this.app
-    const modal = app.modal
-    if (!modal) {
-      this.modalBox.visible = false
-      this.composeInput.visible = false
-      return
-    }
-    const outerW = Math.min(110, Math.max(40, app.width - 10))
-    const innerW = outerW - 6
-    // Reserve rows for border (2), padding (2), title (1), status (1), a spacer
-    // (1), and either the footer hint (1) or the textarea. Sized for the taller
-    // case so the layout doesn't jump when the mode flips.
-    const bodyH = Math.min(30, Math.max(5, app.height - 14))
-
-    const composing = modal.mode !== ModalMode.Browse
-    const rows: TextChunk[][] = []
-
-    if (modal.threadIdx >= 0) {
-      const t = app.store.threads[modal.threadIdx]
-      if (!t) {
-        this.modalBox.visible = false
-        return
-      }
-      rows.push([chunk(`Thread · ${t.file}:${t.range.start}-${t.range.end}`, S.appName)])
-      const c = t.comments.length
-      const meta: TextChunk[] = [
-        chunk(`status: ${t.status} · ${c} ${c === 1 ? 'comment' : 'comments'} · id: ${t.id}`, S.dim),
-      ]
-      if (this.outdated.has(t.id)) meta.push(chunk(' · OUTDATED', S.del))
-      rows.push(meta)
-      rows.push([])
-    } else {
-      rows.push([
-        chunk(
-          `New thread · ${modal.newThreadFile}:${modal.newThreadStart}-${modal.newThreadEnd}`,
-          S.appName,
-        ),
-      ])
-      rows.push([])
-    }
-
-    // Scrollable body of wrapped comments.
-    const { lines: bodyLines, selectedStartRow } = this.modalBodyLines(innerW)
-    let scroll = Math.max(0, modal.scrollY)
-    if (modal.mode === ModalMode.Browse && bodyLines.length > 0) {
-      if (selectedStartRow < scroll) scroll = selectedStartRow
-      else if (selectedStartRow >= scroll + bodyH) scroll = selectedStartRow - bodyH + 1
-    }
-    if (scroll > bodyLines.length - bodyH) scroll = bodyLines.length - bodyH
-    if (scroll < 0) scroll = 0
-    // Persist the clamped values for the next key event.
-    modal.scrollY = scroll
-    modal.bodyHeight = bodyH
-
-    const bodyEnd = Math.min(bodyLines.length, scroll + bodyH)
-    const body: TextChunk[][] = []
-    for (let i = scroll; i < bodyEnd; i++) body.push(bodyLines[i])
-    while (body.length < bodyH) body.push([])
-
-    // Inline scroll affordances at the edges.
-    if (scroll > 0 && body.length > 0) body[0] = [chunk(`▲ ${scroll} more above`, S.dim)]
-    if (bodyEnd < bodyLines.length && body.length > 0) {
-      body[body.length - 1] = [chunk(`▼ ${bodyLines.length - bodyEnd} more below`, S.dim)]
-    }
-    rows.push(...body)
-    rows.push([])
-
-    this.modalText.content = rowsToStyledText(rows)
-    this.composeInput.visible = composing
-    this.composeInput.width = innerW
-    this.modalHint.content = new StyledText(
-      composing ? this.composeHint(modal.mode) : this.browseHint(modal.threadIdx),
-    )
-
-    const innerRows = rows.length + (composing ? COMPOSE_H : 0) + 1
-    const totalH = Math.min(app.height, innerRows + OVERLAY_CHROME_H)
-    this.modalBox.width = outerW
-    this.modalBox.height = totalH
-    this.modalBox.left = Math.max(0, Math.floor((app.width - outerW) / 2))
-    this.modalBox.top = Math.max(0, Math.floor((app.height - totalH) / 2))
-    this.modalBox.visible = true
-  }
-
-  private composeHint(mode: ModalMode): TextChunk[] {
-    return [
-      chunk('alt+enter', S.hotkey),
-      chunk(mode === ModalMode.Edit ? ' save edit · ' : ' save · ', S.dim),
-      chunk('esc', S.hotkey),
-      chunk(' cancel', S.dim),
-    ]
-  }
-
-  private browseHint(threadIdx: number): TextChunk[] {
-    const app = this.app
-    const hint: TextChunk[] = [
-      chunk('↑↓', S.hotkey),
-      chunk(' comment · ', S.dim),
-      chunk('⌃u/⌃d', S.hotkey),
-      chunk(' scroll · ', S.dim),
-    ]
-    const t = threadIdx >= 0 ? app.store.threads[threadIdx] : null
-    if (t && app.findFile(t.file) !== null) {
-      hint.push(chunk('g', S.hotkey), chunk(' goto · ', S.dim))
-    }
-    hint.push(
-      chunk('r', S.hotkey),
-      chunk(' reply · ', S.dim),
-      chunk('e', S.hotkey),
-      chunk(' edit · ', S.dim),
-      chunk('d/D', S.hotkey),
-      chunk(' del comment/thread · ', S.dim),
-      chunk('esc', S.hotkey),
-      chunk(' close', S.dim),
-    )
-    return hint
-  }
-
-  /**
-   * modalBodyLines builds the wrapped, scrollable body: every comment header
-   * plus its wrapped body, with a selection marker. This list is what
-   * modal.scrollY scrolls over.
-   */
-  private modalBodyLines(innerW: number): {
-    lines: TextChunk[][]
-    selectedStartRow: number
-  } {
-    const app = this.app
-    const modal = app.modal
-    const lines: TextChunk[][] = []
-    let selectedStartRow = 0
-    if (!modal || modal.threadIdx < 0) return { lines, selectedStartRow }
-    const t = app.store.threads[modal.threadIdx]
-    if (!t) return { lines, selectedStartRow }
-
-    const wrapW = Math.max(1, innerW - 4) // accounts for the 4-space body indent
-    t.comments.forEach((msg, i) => {
-      const selected = modal.mode === ModalMode.Browse && i === modal.selectedComment
-      if (selected) selectedStartRow = lines.length
-      lines.push([
-        selected ? chunk('▶ ', S.hotkey) : chunk('  '),
-        chunk(`@${msg.author} · ${formatStamp(msg.createdAt)}`, S.mode),
-      ])
-      for (const raw of msg.body.split('\n')) {
-        for (const wrapped of wrapLine(raw, wrapW)) {
-          lines.push([chunk('    '), chunk(wrapped, S.text)])
-        }
-      }
-      lines.push([])
-    })
-    return { lines, selectedStartRow }
-  }
-
-  /**
-   * renderQuitConfirm draws the "really quit?" box. Small and centered, with the
-   * default action spelled out rather than implied by a highlighted button —
-   * there is no pointer here, so the keys are the interface.
-   */
-  private renderQuitConfirm(): void {
-    const app = this.app
-    if (!app.quitConfirm) {
-      this.quitBox.visible = false
+    const confirm = app.confirm
+    if (!confirm) {
+      this.confirmBox.visible = false
       return
     }
 
+    const pad = Math.max(confirm.yes.length, confirm.no.length)
     const rows: TextChunk[][] = [
-      [chunk('Quit refiner?', S.appName)],
+      [chunk(confirm.title, S.appName)],
       [],
       [
         chunk('y', S.hotkey),
         chunk(' or ', S.dim),
         chunk('enter', S.hotkey),
-        chunk('  quit', S.text),
+        chunk('  ' + confirm.yes.padEnd(pad), S.text),
       ],
       [
         chunk('n', S.hotkey),
         chunk(' or ', S.dim),
         chunk('esc', S.hotkey),
-        chunk('    stay', S.text),
+        chunk('    ' + confirm.no.padEnd(pad), S.text),
       ],
     ]
 
@@ -1066,12 +970,12 @@ export class View {
     const outerW = Math.min(app.width, innerW + 6)
     const totalH = Math.min(app.height, rows.length + OVERLAY_CHROME_H)
 
-    this.quitText.content = rowsToStyledText(rows)
-    this.quitBox.width = outerW
-    this.quitBox.height = totalH
-    this.quitBox.left = Math.max(0, Math.floor((app.width - outerW) / 2))
-    this.quitBox.top = Math.max(0, Math.floor((app.height - totalH) / 2))
-    this.quitBox.visible = true
+    this.confirmText.content = rowsToStyledText(rows)
+    this.confirmBox.width = outerW
+    this.confirmBox.height = totalH
+    this.confirmBox.left = Math.max(0, Math.floor((app.width - outerW) / 2))
+    this.confirmBox.top = Math.max(0, Math.floor((app.height - totalH) / 2))
+    this.confirmBox.visible = true
   }
 
   /**
@@ -1212,7 +1116,7 @@ export class View {
     rows.push([])
 
     if (threads.length === 0) {
-      rows.push([chunk('No threads yet. Select lines in the content and press enter.', S.dim)])
+      rows.push([chunk('No threads yet. Select lines in the diff and press enter.', S.dim)])
     } else {
       // Visible window centered on the cursor.
       let start = Math.max(0, app.threadList.cursor - Math.floor(contentH / 2))
@@ -1230,7 +1134,7 @@ export class View {
       chunk('↑↓', S.hotkey),
       chunk(' navigate · ', S.dim),
       chunk('enter', S.hotkey),
-      chunk(' open thread · ', S.dim),
+      chunk(' go to thread · ', S.dim),
       chunk('esc', S.hotkey),
       chunk(' close', S.dim),
     ])
@@ -1246,33 +1150,41 @@ export class View {
   }
 
   /**
-   * One row per THREAD. The author and snippet come from its first comment, and a
-   * `+N` tail says how many more are inside — without it the row reads as though a
-   * thread were a single comment, which is the whole confusion to avoid.
+   * One row per THREAD — status glyph, drift, where it is, who opened it, how
+   * many more comments are inside (`+N`, without which a thread reads as one
+   * comment), and the first line of the opener. An index into the pane, not a
+   * viewer: `enter` jumps to the card.
    */
   private buildThreadListRow(t: StoredThread, isCursor: boolean, w: number): TextChunk[] {
+    const app = this.app
     const loc = `${t.file}:${t.range.start}-${t.range.end}`
     const first = t.comments[0]
     const author = first ? '@' + first.author : ''
-    const snippet = first ? first.body.split('\n')[0] : ''
+    const snippet = first ? firstLine(first.body) : ''
     const replies = Math.max(0, t.comments.length - 1)
-    const stale = this.outdated.has(t.id)
+    const resolved = t.status === 'resolved'
+    const drift = app.threadDrift(t.id)
+    const flag = drift?.status === 'lost' ? '[lost] ' : drift?.status === 'moved' ? '[moved] ' : ''
+    const flagStyle = drift?.status === 'lost' ? S.del : S.dim
 
     if (isCursor) {
       const bg = S.palette.cursorBg
-      const row: TextChunk[] = [chunk('▶ ', { bg, fg: S.palette.accent, bold: true })]
-      if (stale) row.push(chunk('[outdated] ', { bg, fg: S.palette.delFg }))
+      const row: TextChunk[] = [
+        chunk('▶ ', { bg, fg: S.palette.accent, bold: true }),
+        chunk(resolved ? '✓ ' : '○ ', withBg(resolved ? S.dim : S.marker, bg)),
+      ]
+      if (flag) row.push(chunk(flag, withBg(flagStyle, bg)))
       row.push(chunk(loc + '  ', { bg }), chunk(author, withBg(S.mode, bg)))
       if (replies > 0) row.push(chunk(` +${replies}`, withBg(S.hotkey, bg)))
-      row.push(chunk('  ', { bg }), chunk(snippet, withBg(S.text, bg)))
+      row.push(chunk('  ', { bg }), chunk(snippet, withBg(resolved ? S.dim : S.text, bg)))
       return fitOverlayRow(row, w, { bg })
     }
 
-    const row: TextChunk[] = [chunk('  ')]
-    if (stale) row.push(chunk('[outdated] ', S.del))
-    row.push(chunk(loc, S.dir), chunk('  '), chunk(author, S.mode))
+    const row: TextChunk[] = [chunk('  '), chunk(resolved ? '✓ ' : '○ ', resolved ? S.dim : S.marker)]
+    if (flag) row.push(chunk(flag, flagStyle))
+    row.push(chunk(loc, resolved ? S.dim : S.dir), chunk('  '), chunk(author, resolved ? S.dim : S.mode))
     if (replies > 0) row.push(chunk(` +${replies}`, S.hotkey))
-    row.push(chunk('  '), chunk(snippet, S.text))
+    row.push(chunk('  '), chunk(snippet, resolved ? S.dim : S.text))
     return clampRow(row, w)
   }
 

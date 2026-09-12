@@ -44,7 +44,7 @@ export const KEYMAP: readonly KeySection[] = [
   {
     title: 'Diff',
     bindings: [
-      { keys: '↑ ↓', what: 'scroll' },
+      { keys: '↑ ↓', what: 'scroll — through the thread cards too, row by row' },
       { keys: '⇧↑ ⇧↓', what: 'extend a multi-line selection' },
       { keys: '⌃u ⌃d', what: 'half-page up / down (also pgup / pgdn)' },
       { keys: 'home / end', what: 'jump to the first / last row (G also jumps to the end)' },
@@ -52,8 +52,8 @@ export const KEYMAP: readonly KeySection[] = [
         keys: 'h / H',
         what: 'jump to the next / previous hunk — the next block of changed lines, wrapping at the ends',
       },
-      { keys: 'space', what: 'stage or unstage the line, or the whole selection' },
-      { keys: 'enter', what: 'open the thread on this line, or start a new one' },
+      { keys: 'space', what: 'stage or unstage the line, or the whole selection (cards are skipped)' },
+      { keys: 'enter', what: 'go to the thread on this line, or start a new one over the selection' },
       { keys: 'tab', what: 'cycle the view: DIFF → SPLIT → NORMAL' },
       { keys: 'e', what: 'open the file in your editor, at the line under the cursor' },
     ],
@@ -61,15 +61,19 @@ export const KEYMAP: readonly KeySection[] = [
   {
     title: 'Review threads',
     bindings: [
-      { keys: 'c', what: 'list every thread in the repo (a thread holds one or more comments)' },
-      { keys: '↑ ↓', what: 'move between the comments inside a thread' },
-      { keys: '⌃u ⌃d', what: 'scroll a long comment without changing the selection' },
-      { keys: 'g', what: 'jump to the code the thread is anchored to' },
-      { keys: 'r', what: 'reply — adds a comment to this thread' },
-      { keys: 'e', what: 'edit the selected comment' },
-      { keys: 'd / D', what: 'delete the selected comment / the whole thread' },
+      {
+        keys: 'enter',
+        what: 'on a card: expand or collapse it — collapsed shows the header and one preview line',
+      },
+      { keys: 'r', what: 'on a card: reply — the textarea opens right under it' },
+      { keys: 'e', what: 'on a card: edit your last comment in the thread' },
+      { keys: 'x', what: 'on a card: resolve the thread, or reopen it — resolved folds to one muted row' },
+      { keys: 'D', what: 'on a card: delete the whole thread (asks first)' },
+      { keys: 'z', what: 'expand every card in the file, or collapse them all' },
+      { keys: 'n / N', what: 'next / previous thread, across files in tree order' },
+      { keys: 'c', what: 'list every thread in the repo — enter jumps to it (a thread holds one or more comments)' },
       { keys: 'alt+enter', what: 'save what you wrote (alt+s and ⌃s work too)' },
-      { keys: 'esc', what: 'cancel writing, or close the thread' },
+      { keys: 'esc', what: 'cancel writing' },
     ],
   },
   {

@@ -64,7 +64,10 @@ export async function relocateThreads(app: App, paths?: string[]): Promise<void>
   settleBaseline(app, store)
   let changed = false
   let driftChanged = false
-  files.forEach((path, i) => {
+  // Under `withStableCursor`: a corrected range moves a card, and a card moving
+  // under the cursor must not leave it on a different row. The epoch bump that
+  // redraws the header's drift label comes with it.
+  app.withStableCursor(() => files.forEach((path, i) => {
     const lines = contents[i]
     for (const t of store.threadsForFile(path)) {
       const prior = app.drift.get(t.id)
@@ -104,7 +107,7 @@ export async function relocateThreads(app: App, paths?: string[]): Promise<void>
       if (!prior || prior.status !== status) driftChanged = true
       app.drift.set(t.id, { status, from })
     }
-  })
+  }))
 
   if (paths === undefined) {
     // A full pass is the moment to forget threads that no longer exist.

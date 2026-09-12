@@ -148,7 +148,7 @@ test('loadAllFiles lists the whole repo, root-relative, exactly once', async () 
 
 test('every path loadAllFiles returns can be opened from the process cwd', async () => {
   await enterRepoRoot()
-  // Exactly what `readAsContext()` and `isThreadOutdated()` do with these paths,
+  // Exactly what `readAsContext()` and the relocation pass do with these paths,
   // without having to stand up an App.
   for (const f of await loadAllFiles(SOURCE)) {
     expect(await Bun.file(f.path).exists(), f.path).toBe(true)

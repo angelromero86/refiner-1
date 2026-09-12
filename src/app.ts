@@ -181,41 +181,6 @@ export type StagingJob =
 /** Shared empty result for `stagedFor`, so the hot render path allocates nothing. */
 const EMPTY_STAGED: ReadonlySet<number> = new Set<number>()
 
-/** The FSM state of the thread modal. */
-export enum ModalMode {
-  Browse,
-  Compose,
-  Edit,
-}
-
-export interface ThreadModal {
-  /** Index into store.threads, or -1 while composing a brand-new thread. */
-  threadIdx: number
-  /**
-   * Id of the thread `threadIdx` points at, or '' while composing a new one.
-   *
-   * The index is what the renderer and the key handler use, but it is only valid
-   * for one shape of `store.threads`: a save that merges somebody else's copy of
-   * the file rebuilds that array, and an index left over from the old one would
-   * put `d`/`D` on a different thread. The id is what survives, so it is the id
-   * the modal is re-anchored by (`src/threads-ui.ts`).
-   */
-  threadId: string
-  /** New-thread anchor (only meaningful while threadIdx === -1). */
-  newThreadFile: string
-  newThreadStart: number
-  newThreadEnd: number
-  /** Cursor within the comment list (browse mode). */
-  selectedComment: number
-  mode: ModalMode
-  /** Index of the comment being edited; only valid in Edit mode. */
-  editIdx: number
-  /** Topmost wrapped body row currently shown. */
-  scrollY: number
-  /** Visible row count for the wrapped body (excludes title/status/footer). */
-  bodyHeight: number
-}
-
 export interface ThreadListModal {
   cursor: number
 }
@@ -236,6 +201,20 @@ export interface Compose {
   end: number
   /** Edit only: the comment whose body is in the widget. */
   commentId: string
+}
+
+/**
+ * A yes/no question over the panes — quitting, deleting a thread. `y`/`enter`
+ * run `onYes`; `n`/`esc` just close it. There is no pointer here, so the keys
+ * are spelled out in the box.
+ */
+export interface Confirm {
+  title: string
+  /** What `y` does, in one or two words: `quit`, `delete`. */
+  yes: string
+  /** What `n` does: `stay`, `keep`. */
+  no: string
+  onYes: () => void
 }
 
 /** The keymap overlay (`k`). Scrollable, because the list outgrows short terminals. */
@@ -371,6 +350,13 @@ export class App {
    * diff finished loading. The load applies it once the cache is populated.
    */
   pendingNavLine = 0
+  /**
+   * A thread `n`/`N` or the list asked for whose file is not loaded yet — not
+   * in the tree (CHANGES mode, so the mode is toggled first) or not in the
+   * cache. `loadFiles` and `loadDiffFor` consume it once they can, under their
+   * generation guards like `pendingNavLine`.
+   */
+  pendingJumpThread = ''
 
   // Caches, keyed by file path.
   cache = new Map<string, RenderedDiff>()
@@ -458,7 +444,6 @@ export class App {
   driftStore: Store | null = null
   /** The most recent relocation pass, for callers that need it settled. */
   relocation: Promise<void> = Promise.resolve()
-  modal: ThreadModal | null = null
   threadList: ThreadListModal | null = null
   compose: Compose | null = null
   /** Threads whose card shows every comment; the rest are collapsed. */
@@ -474,8 +459,8 @@ export class App {
   finder: FinderModal | null = null
   help: HelpModal | null = null
   themePicker: ThemePickerModal | null = null
-  /** True while the quit confirmation is up. `q` and `esc` are easy to hit. */
-  quitConfirm = false
+  /** The yes/no box in force, or null. `q` and `esc` are easy to hit; so is `D`. */
+  confirm: Confirm | null = null
 
   width = 0
   height = 0
@@ -719,6 +704,14 @@ export class App {
     if (this.cursor >= this.flat.length) {
       this.cursor = this.flat.length > 0 ? this.flat.length - 1 : 0
     }
+    // A jump that had to wait for this tree — `n` onto a thread whose file only
+    // ALL lists. Past the guard, so `revealPath` opens the right mode's folders.
+    if (this.pendingJumpThread !== '') {
+      const i = this.store.indexOfThread(this.pendingJumpThread)
+      const t = i >= 0 ? this.store.threads[i] : null
+      if (t && this.findFile(t.file)) this.jumpToThread(t)
+      else this.pendingJumpThread = ''
+    }
     if (this.selectedPath !== '') {
       const file = this.findFile(this.selectedPath)
       if (file) {
@@ -848,6 +841,7 @@ export class App {
       // to the new row count and drop a stale selection.
       if (file.path === this.selectedPath) {
         if (this.pendingNavLine > 0) this.navigateToPendingLine()
+        if (this.pendingJumpThread !== '') this.landOnPendingThread()
         this.clampCursor()
         this.ensureCursorVisible()
       }
@@ -906,6 +900,9 @@ export class App {
    * explicit `r` binding clears it before calling this.
    */
   async refresh(): Promise<void> {
+    // What the cursor is on, before the store and the diff are replaced: the
+    // thread cards a reload brings in or takes out move every row under it.
+    const at = this.selectedPath !== '' ? this.cursorIdentity() : null
     this.clearCaches()
     const gen = this.loadGen
     // Let any save in flight finish first. It is about to be replaced by a fresh
@@ -937,7 +934,11 @@ export class App {
     // synced with bytes it never read. What a superseded refresh must not do is
     // spend a `git status` on a change set somebody newer is already loading.
     if (gen !== this.loadGen) return
+    // The fresh store is a new layout; the memo keys on its identity.
+    this.threadsEpoch++
     await this.loadFiles()
+    if (gen !== this.loadGen || at === null) return
+    if (this.selectedPath !== '' && this.cache.has(this.selectedPath)) this.restoreCursor(at)
   }
 
   async onResize(width: number, height: number): Promise<void> {
@@ -1139,8 +1140,14 @@ export class App {
     return this.activeLayout().cardStart.get(threadId) ?? -1
   }
 
-  /** Keep the cursor and the selection inside the rows that exist. */
+  /**
+   * Keep the cursor and the selection inside the rows that exist. A no-op
+   * while the file's diff is not loaded: there are no rows to clamp to, and
+   * zeroing the cursor during a reload would lose the place the reload is
+   * about to restore.
+   */
   clampCursor(): void {
+    if (!this.cache.has(this.selectedPath)) return
     const n = this.displayRowCount()
     if (this.selectionAnchor >= n) this.selectionAnchor = -1
     if (this.contentCursor >= n) this.contentCursor = Math.max(0, n - 1)
@@ -1171,6 +1178,7 @@ export class App {
 
   /** Put the cursor back on what `cursorIdentity()` described, in the layout as it is now. */
   restoreCursor(id: CursorIdentity): void {
+    if (!this.cache.has(this.selectedPath)) return
     const start = id.threadId === '' ? -1 : this.cardStartOf(id.threadId)
     if (start >= 0) {
       const row = this.activeLayout().rows[start]
@@ -1304,6 +1312,79 @@ export class App {
         return
       }
     }
+  }
+
+  /**
+   * jumpToThread points the pane at a thread: reveal its file, expand its
+   * card, park the cursor on the header, centered. A file the tree does not
+   * list (CHANGES mode) means switching to ALL first; a file not yet cached
+   * means waiting for its diff. Both wait through `pendingJumpThread`.
+   */
+  jumpToThread(t: StoredThread): void {
+    this.expandedThreads.add(t.id)
+    this.threadsEpoch++
+    const file = this.findFile(t.file)
+    if (!file) {
+      this.pendingJumpThread = t.id
+      if (this.fileMode === FileMode.Changes) void this.toggleFileMode()
+      return
+    }
+    if (this.selectedPath !== t.file) {
+      this.selectedPath = t.file
+      this.contentCursor = 0
+      this.contentScroll = 0
+    }
+    this.selectionAnchor = -1
+    this.revealPath(t.file)
+    this.focus = Focus.Content
+    this.pendingJumpThread = t.id
+    if (this.cache.has(t.file)) {
+      this.landOnPendingThread()
+      return
+    }
+    this.ensureDiffLoaded(file)
+  }
+
+  /** Finish a `jumpToThread` once the file's layout exists. */
+  private landOnPendingThread(): void {
+    const id = this.pendingJumpThread
+    this.pendingJumpThread = ''
+    const start = this.cardStartOf(id)
+    if (start < 0) return
+    this.contentCursor = start
+    this.selectionAnchor = -1
+    this.centerCursor()
+  }
+
+  /** Expand or collapse one card, keeping the cursor on what it was on. */
+  toggleExpanded(id: string): void {
+    this.withStableCursor(() => {
+      if (!this.expandedThreads.delete(id)) this.expandedThreads.add(id)
+    })
+  }
+
+  /** `z`: expand every card in the file if any is collapsed, else collapse them all. */
+  toggleAllExpanded(): void {
+    const threads = this.store.threadsForFile(this.selectedPath)
+    if (threads.length === 0) return
+    const anyCollapsed = threads.some((t) => !this.expandedThreads.has(t.id))
+    this.withStableCursor(() => {
+      for (const t of threads) {
+        if (anyCollapsed) this.expandedThreads.add(t.id)
+        else this.expandedThreads.delete(t.id)
+      }
+    })
+  }
+
+  /** Counts for the header: `open` and `resolved` threads. */
+  threadCounts(): { open: number; resolved: number } {
+    let open = 0
+    let resolved = 0
+    for (const t of this.store.threads) {
+      if (t.status === 'resolved') resolved++
+      else open++
+    }
+    return { open, resolved }
   }
 
   // ---------------------------------------------------------------- layout
@@ -1467,23 +1548,6 @@ export class App {
       this.layoutMemo.delete(this.layoutMemo.keys().next().value!)
     }
     return layout
-  }
-
-  /**
-   * isThreadOutdated reports whether a thread's code can no longer be found in
-   * the working tree — `lost` in the drift map, which the relocation passes
-   * keep current (`src/relocate.ts`). A thread no pass has seen yet (one just
-   * created) is not outdated.
-   *
-   * Deliberately NOT "the file isn't in the change set": in ALL mode a thread
-   * can legitimately sit on a file nobody has touched, and flagging those as
-   * stale would make the whole feature look broken.
-   *
-   * Async only because `src/view.ts` awaits it from the days it read the file
-   * itself; it costs nothing now.
-   */
-  async isThreadOutdated(t: StoredThread): Promise<boolean> {
-    return this.drift.get(t.id)?.status === 'lost'
   }
 
   // ---------------------------------------------------------------- labels

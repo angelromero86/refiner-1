@@ -98,3 +98,30 @@ test('sin lista de ignorados todo cuenta como working tree', () => {
   expect(classify('.refiner/comments.json', [])).toBe('store')
   expect(classify('.git/index', [])).toBe('ignore')
 })
+
+// ------------------------------------------------------------ cuándo esperar
+//
+// `overlayOpen` decide si una recarga espera. Escribir un comentario bloquea —
+// `refresh()` reconstruye el store bajo el textarea — pero estar leyendo un
+// thread, con el cursor encima o la tarjeta desplegada, no: el layout reancla el
+// cursor por identidad, así que el thread que llega de un agente aparece solo.
+
+import { overlayOpen } from '../src/watch.ts'
+import { openPane, thread } from './pane.ts'
+
+test('componer bloquea la recarga; leer un thread no', () => {
+  const app = openPane({ threads: [thread('t-A', 3, 4)] })
+  expect(overlayOpen(app)).toBe(false)
+  app.expandedThreads.add('t-A')
+  app.threadsEpoch++
+  app.contentCursor = app.cardStartOf('t-A')
+  expect(overlayOpen(app)).toBe(false)
+  app.compose = { kind: 'reply', threadId: 't-A', file: '', start: 0, end: 0, commentId: '' }
+  expect(overlayOpen(app)).toBe(true)
+  app.compose = null
+  app.confirm = { title: '', yes: '', no: '', onYes: () => {} }
+  expect(overlayOpen(app)).toBe(true)
+  app.confirm = null
+  app.threadList = { cursor: 0 }
+  expect(overlayOpen(app)).toBe(true)
+})

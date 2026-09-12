@@ -95,7 +95,7 @@ test('a thread without an anchor is backfilled from the file and persisted', asy
   const disk = await readStore()
   expect(disk.threads[0].anchor).toEqual(BODY_ANCHOR)
   expect(disk.threads[0].range).toEqual({ start: 4, end: 5 })
-  expect(await app.isThreadOutdated(app.store.threads[0])).toBe(false)
+  expect(app.threadDrift(app.store.threads[0].id)?.status).toBe('exact')
 })
 
 test('a thread whose code moved is moved with it, on disk and in memory', async () => {
@@ -121,7 +121,7 @@ test('a thread whose code is gone is lost, and nothing is written', async () => 
   await relocateThreads(app)
 
   expect(app.threadDrift('t-1')).toEqual({ status: 'lost', from: { start: 4, end: 5 } })
-  expect(await app.isThreadOutdated(app.store.threads[0])).toBe(true)
+  expect(app.threadDrift(app.store.threads[0].id)?.status).toBe('lost')
   expect(app.store.threads[0].range).toEqual({ start: 4, end: 5 })
   expect(await Bun.file(storePath).text()).toBe(before)
 })

@@ -35,8 +35,9 @@ const DEBOUNCE_MS = 120
 
 /**
  * How long to wait before retrying while an overlay is open. Refreshing under a
- * half-written comment would be hostile, and the thread indices the modal holds
- * could shift beneath it.
+ * half-written comment would be hostile — `refresh()` rebuilds the store under
+ * the textarea — and the indices an overlay's cursor holds would shift beneath
+ * it.
  */
 const BUSY_RETRY_MS = 400
 
@@ -255,13 +256,20 @@ export function shouldReload(o: {
   return o.text !== o.expected
 }
 
-/** True while something modal owns the screen. */
-function overlayOpen(app: App): boolean {
+/**
+ * True while something owns the screen that a reload would pull the rug from
+ * under: the compose textarea above all, and every overlay whose cursor is an
+ * index. Merely browsing — the cursor on a card, a card expanded — does NOT
+ * block: the layout re-anchors the cursor by identity, so a thread arriving
+ * from an agent simply appears. Exported for the test that pins which is which.
+ */
+export function overlayOpen(app: App): boolean {
   return (
-    app.modal !== null ||
+    app.compose !== null ||
     app.threadList !== null ||
     app.finder !== null ||
     app.help !== null ||
-    app.quitConfirm
+    app.themePicker !== null ||
+    app.confirm !== null
   )
 }

@@ -12,7 +12,7 @@
  */
 
 import type { CliRenderer, KeyEvent } from '@opentui/core'
-import { App, Focus, ModalMode, ViewMode } from './app.ts'
+import { App, Focus, ViewMode } from './app.ts'
 import { flatten } from './tree.ts'
 import { keyString } from './keys.ts'
 import { BUILTIN_THEMES } from './theme.ts'
@@ -20,8 +20,10 @@ import { openEditor, openLazygit, openSerie } from './externals.ts'
 import { toggleFullStage, toggleStaged } from './staging.ts'
 import { handleFinderKey, openFinder } from './finder.ts'
 import {
+  handleCardKey,
+  handleComposeKey,
   handleThreadListKey,
-  handleModalKey,
+  nextThread,
   openOrCreateThread,
 } from './threads-ui.ts'
 
@@ -63,12 +65,19 @@ function shutdown(renderer: CliRenderer): void {
 export function route(app: App, renderer: CliRenderer, key: string): boolean {
   // Overlays get first refusal, outermost first, so their keys never leak into
   // whatever is behind them.
-  if (app.quitConfirm) return handleQuitConfirmKey(app, renderer, key)
+  if (app.confirm) return handleConfirmKey(app, key)
   if (app.themePicker) return handleThemePickerKey(app, key)
   if (app.help) return handleHelpKey(app, key)
-  if (app.modal) return handleModalKey(app, key)
   if (app.threadList) return handleThreadListKey(app, key)
   if (app.finder) return handleFinderKey(app, key)
+  // The inline textarea owns the keyboard while it is open: `esc` and the save
+  // chords are claimed, everything else is typing and must NOT reach the
+  // global handler — `q` in a comment is a letter, not a quit.
+  if (app.compose) return handleComposeKey(app, key)
+  // A card under the cursor speaks first. `r`, `e` and `g` all mean something
+  // globally, and on a thread the thread is what you mean; what the card does
+  // not claim (arrows, paging, `h`, `tab`…) falls through to the pane as usual.
+  if (app.focus === Focus.Content && app.threadAtCursor() && handleCardKey(app, key)) return true
   if (handleGlobalKey(app, renderer, key)) return true
   return app.focus === Focus.Tree
     ? handleTreeKey(app, key)
@@ -85,7 +94,12 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
     case 'esc':
       // Both are one keystroke away from anything else you might be doing, so
       // they ask first. ⌃c stays immediate as the deliberate escape hatch.
-      app.quitConfirm = true
+      app.confirm = {
+        title: 'Quit refiner?',
+        yes: 'quit',
+        no: 'stay',
+        onYes: () => shutdown(renderer),
+      }
       return true
     case 'r':
       // An explicit refresh is the user saying "start over", so it also dismisses
@@ -102,6 +116,17 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
     case 'c':
       // Reachable only when no other modal is open — route() checks those first.
       app.threadList = { cursor: 0 }
+      return true
+    case 'n':
+      nextThread(app, 1)
+      return true
+    case 'N':
+      nextThread(app, -1)
+      return true
+    case 'z':
+      // Every card in the file at once. From either pane: the tree cursor is
+      // often where you are when you want the whole file's review unfolded.
+      app.toggleAllExpanded()
       return true
     case 'p':
     case 'ctrl+p':
@@ -147,20 +172,25 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
 }
 
 /**
- * handleQuitConfirmKey drives the quit confirmation. Nothing is lost by quitting
- * — threads are written on every edit and staging lives in git — so this guards
- * against the fat-finger, not against data loss.
+ * handleConfirmKey drives a yes/no box — quitting, deleting a thread. For the
+ * quit, nothing is lost by saying yes (threads are written on every edit and
+ * staging lives in git), so it guards against the fat-finger, not against data
+ * loss; for a deletion it IS the guard, which is why `D` asks and `d` is not a
+ * key.
  */
-function handleQuitConfirmKey(app: App, renderer: CliRenderer, key: string): boolean {
+function handleConfirmKey(app: App, key: string): boolean {
+  const confirm = app.confirm
+  if (!confirm) return false
   switch (key) {
     case 'y':
     case 'enter':
-      shutdown(renderer)
+      app.confirm = null
+      confirm.onYes()
       return true
     case 'n':
     case 'esc':
     case 'q':
-      app.quitConfirm = false
+      app.confirm = null
       return true
     default:
       // Modal: swallow everything so a stray key can't act on the view behind.
@@ -396,10 +426,9 @@ function handleContentKey(app: App, renderer: CliRenderer, key: string): boolean
   return true
 }
 
-/** Exported for the view, which needs to know whether a text field owns input. */
+/** Whether a text widget owns the keyboard: the finder's input or the compose textarea. */
 export function textFieldActive(app: App): boolean {
-  if (app.finder) return true
-  return app.modal !== null && app.modal.mode !== ModalMode.Browse
+  return app.finder !== null || app.compose !== null
 }
 
 export { ViewMode }

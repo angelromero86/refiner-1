@@ -24,6 +24,13 @@ const cases: [string, string][] = [
   ['q', 'q'],
   ['G', 'G'],
   ['D', 'D'],
+  ['N', 'N'],
+  ['n', 'n'],
+  ['x', 'x'],
+  ['z', 'z'],
+  ['r', 'r'],
+  ['e', 'e'],
+  ['y', 'y'],
   ['\x03', 'ctrl+c'],
   ['\x15', 'ctrl+u'],
   ['\x04', 'ctrl+d'],
@@ -77,6 +84,13 @@ test('every key the app binds is reachable', () => {
     'end',
     'G',
     'D',
+    'N',
+    'n',
+    'x',
+    'z',
+    'r',
+    'e',
+    'y',
   ]
   for (const b of bound) expect(produced, `binding ${b}`).toContain(b)
 })

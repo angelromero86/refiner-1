@@ -655,3 +655,49 @@ test('addThread stores the anchor it was given, through a plain save and a merge
   const bare = s.addThread('src/b.ts', 1, 1, { author: 'angel', body: 'bare' })
   expect('anchor' in bare).toBe(false)
 })
+
+// ----------------------------------------------------------------- status
+// `setStatus` is the reviewer's `x`: resolve or reopen. Same id-keyed log, so
+// a verdict given while an agent was replying lands on the merged copy.
+
+test('setStatus flips the thread and persists', async () => {
+  await seed()
+  const s = await Store.load(storePath)
+  s.setStatus('t-ms9j4trq-1', 'resolved')
+  expect(s.threads[0].status).toBe('resolved')
+  expect(s.hasPendingWrites()).toBe(true)
+  await s.save()
+  expect((await readFile()).threads[0].status).toBe('resolved')
+  s.setStatus('t-ms9j4trq-1', 'open')
+  await s.save()
+  expect((await readFile()).threads[0].status).toBe('open')
+  expect(() => s.setStatus('nope', 'open')).toThrow(/not found/)
+})
+
+test('a status flip survives a merge and a deleted thread swallows it quietly', async () => {
+  await seed()
+  const s = await Store.load(storePath)
+  s.setStatus('t-ms9j4trq-1', 'resolved')
+  await externalWrite((d) => {
+    d.threads[0].comments.push({
+      id: 'c-agent-2',
+      author: 'Claude',
+      role: 'assistant',
+      body: 'late reply',
+      createdAt: '2026-08-01T11:00:00.000Z',
+    })
+  })
+  let report = await s.save()
+  expect(report).toEqual({ merged: true, dropped: 0, overwritten: 0 })
+  const t = (await readFile()).threads[0]
+  expect(t.status).toBe('resolved')
+  expect(t.comments.map((c: { id: string }) => c.id)).toContain('c-agent-2')
+
+  s.setStatus('t-ms9j4trq-1', 'open')
+  await externalWrite((d) => {
+    d.threads = d.threads.filter((x: { id: string }) => x.id !== 't-ms9j4trq-1')
+  })
+  report = await s.save()
+  expect(report).toEqual({ merged: true, dropped: 0, overwritten: 0 })
+  expect((await readFile()).threads.some((x: { id: string }) => x.id === 't-ms9j4trq-1')).toBe(false)
+})
