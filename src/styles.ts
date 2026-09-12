@@ -138,6 +138,32 @@ export interface Styles {
   stagedCursorRow: CursorRowStyles
   ctxCursorRow: CursorRowStyles
 
+  /**
+   * Review-comment markdown (`src/markdown.ts`). Every role is DERIVED from the
+   * palette above rather than themed on its own, so a config.toml that retunes
+   * `accent` or `del_fg` moves the comment rendering with it and no theme has to
+   * learn a dozen new keys.
+   */
+  mdText: Style
+  mdBold: Style
+  /** Inline code: its own foreground on the cursor-line tint. */
+  mdCode: Style
+  /** Fenced block rows: the same tint, painted edge to edge. */
+  mdCodeBlock: Style
+  mdHeading: Style
+  /** Blockquote text and its `▎` bar. */
+  mdQuote: Style
+  /** The `•` / `1.` list markers. */
+  mdBullet: Style
+  /** The `───` horizontal rule. */
+  mdRule: Style
+  mdLink: Style
+  /** The severity badge that opens a finding. Same hues as the rest of the UI. */
+  sevMustFix: Style
+  sevSuggestion: Style
+  sevQuestion: Style
+  sevNit: Style
+
   /** Whether diff content should be syntax-colored at all. */
   syntaxHighlight: boolean
 }
@@ -336,6 +362,29 @@ function buildStyles(t: Theme): Styles {
       content: { bg: cursorBg, fg: foreground },
       pad: { bg: cursorBg },
     },
+
+    // Comment markdown. Code takes the cursor-line tint as its background — the
+    // one "raised surface" tone every theme already defines — with `focus` as
+    // the foreground so an identifier stands apart from the prose around it
+    // without borrowing the severity hues. Headings are the brand color, and
+    // links the staged blue, the same "points elsewhere" role the syntax map
+    // gives `link`.
+    mdText: { fg: foreground },
+    mdBold: { fg: foreground, bold: true },
+    mdCode: { fg: focus, bg: cursorBg },
+    mdCodeBlock: { fg: foreground, bg: cursorBg },
+    mdHeading: { fg: primary, bold: true },
+    mdQuote: { fg: muted },
+    mdBullet: { fg: accent },
+    mdRule: { fg: muted },
+    mdLink: { fg: stagedFg, underline: true },
+    // Severity hues follow the UI's own vocabulary: red is what `D` and the
+    // error banner use, accent is the "look here" yellow, the staged blue is
+    // informational, and a nit is deliberately quiet.
+    sevMustFix: { fg: delFg, bold: true },
+    sevSuggestion: { fg: accent, bold: true },
+    sevQuestion: { fg: stagedFg, bold: true },
+    sevNit: { fg: muted, bold: true },
   }
 }
 
