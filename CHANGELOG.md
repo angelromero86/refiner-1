@@ -7,6 +7,83 @@ formato de `.refiner/comments.json`.
 
 Como no hay tags todavía, cada versión lista los commits que la componen.
 
+## [0.2.0] — 2026-09-13
+
+### Cambiado
+
+- **Los threads viven dentro del diff.** Se acabó el modal: cada thread es una
+  **tarjeta** en el propio panel, justo debajo de la última línea de su rango, y
+  el cursor la recorre fila a fila como cualquier otra. Plegada enseña la cabecera
+  (`@autor · severidad · hora · N comments`) y una línea de preview; `enter` la
+  despliega. Resuelta se queda en una sola fila apagada. Un thread anclado a
+  líneas fuera del contexto del diff (o perdido) ya no desaparece: la tarjeta se
+  coloca en la línea más cercana y la cabecera dice a qué líneas se refería.
+- **Los cuerpos se renderizan como markdown**: negrita, `código`, bloques de
+  código con syntax highlighting (tree-sitter, las mismas gramáticas que el
+  diff), listas, citas, títulos y el badge de severidad (`must-fix`,
+  `suggestion`, `question`, `nit`) coloreado. Antes se enseñaba el markup tal
+  cual.
+- **Responder, editar y crear también son inline**: el textarea aparece bajo la
+  tarjeta (o bajo la selección para un thread nuevo), sin overlay. Se ha ido la
+  navegación por comentario dentro de un thread: la unidad es el thread.
+- **Teclas sobre una tarjeta**: `enter` pliega/despliega, `r` responde, `e` edita
+  tu último comentario, `x` resuelve o reabre, `D` borra (pide confirmación).
+  Sobre una línea de código, `enter` va a su tarjeta si la tiene o abre una nueva.
+  Se resuelven antes que las globales, así que `r` sobre una tarjeta es responder
+  y fuera de ella sigue siendo refrescar.
+- **Lista de threads (`c`)**: agrupada por fichero en el orden del árbol, con el
+  badge de severidad, `[moved]`/`[lost]` cuando el anclaje derivó; se abre sobre
+  el thread bajo el cursor; `x` resuelve desde la lista y `o` oculta los resueltos.
+- La cabecera cuenta `N open · M resolved` en vez de `N threads`.
+- `git status` deja de listar un repositorio anidado (un worktree aparcado dentro
+  del árbol) como un fichero sin nombre que `git diff` no podía abrir.
+
+### Añadido
+
+- **Los threads siguen al código.** Al crear un thread se guarda un `anchor`
+  (las líneas comentadas más tres de contexto a cada lado, el mismo formato que
+  mantiene la extensión de VSCode), y en cada carga y refresco los threads del
+  fichero se reanclan contra el working tree: si el código se movió, el `range`
+  se corrige en memoria y en disco (así los agentes leen las líneas correctas);
+  si desapareció, la tarjeta lo marca como `lost — was L38-40`. Hay un fallback
+  difuso (≥60 % de las líneas más contexto) antes de darlo por perdido, y una
+  guarda para que un thread sobre un `}` suelto no se teletransporte a otro.
+- `n` / `N` saltan al siguiente / anterior thread cruzando ficheros; `z` despliega
+  o pliega todas las tarjetas del fichero.
+- `x` resuelve threads. refiner escribe `status: "resolved"`; los agentes siguen
+  sin poder hacerlo.
+- Los `Op` del store para `setRange`, `setAnchor` y `setStatus`, con replay en el
+  merge (última escritura gana, nunca cuentan como conflicto).
+- `src/rows.ts` (filas de display: diff, tarjeta o compose), `src/card.ts`,
+  `src/markdown.ts`, `src/codeblocks.ts`, `src/anchor.ts`, `src/relocate.ts`, y
+  sus tests (`rows`, `card`, `cursor`, `markdown`, `anchor`, `relocate`,
+  `staged-lines`).
+
+### Corregido
+
+- **Staging "línea sí, línea no".** Qué filas estaban en el índice se deducía
+  casando el *contenido* de `git diff --cached` contra el diff del worktree, y
+  con líneas repetidas dentro de un bloque (blancas, `}`) se las llevaban las
+  primeras ocurrencias. No era cosmético: la siguiente pulsación reconstruía el
+  set deseado desde esa atribución y corrompía el índice. Ahora se deriva por
+  **número de línea** de dos diffs (`--cached` para los borrados, index→worktree
+  para los añadidos) y se reconcilia el recuento dentro de cada run de líneas
+  idénticas. Fuzzeado contra git real: 42/986 casos adversarios fallaban con la
+  regla ingenua, quedan 3 inherentes (una línea idéntica repetida *no*
+  adyacente).
+- Un resize que dejaba el bloque de compose fuera del panel escondía el textarea
+  pero le dejaba el teclado (OpenTUI 0.5 sí enfoca renderables ocultos).
+- Las operaciones registradas mientras una escritura del store estaba en vuelo se
+  retiraban con ella y se perdían en el siguiente merge.
+- `contentScroll` nunca se acortaba con el número de filas: plegar una tarjeta
+  alta dejaba una fila y un panel de blancos.
+- `[`, `]`, `b` y `← →` re-envolvían las tarjetas bajo un cursor que se quedaba en
+  su índice antiguo.
+- Un comentario sin `body` (escrito por otro cliente) reventaba dentro de `render()`.
+
+<sub>Commits: fca83e1, 6050cce, 6575470, 1912816, 389ff6c, ff66f41, 375e283,
+08a619a, fb770b3, 0fbd6c9, 44d253b.</sub>
+
 ## [0.1.4] — 2026-08-09
 
 ### Añadido
