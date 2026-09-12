@@ -70,6 +70,28 @@ unstaged. Read the staged set through `app.stagedFor(path)` (intent, then git)
 and never re-derive it from `app.staged`. Coalescing pending jobs by path is
 only safe because of the invariant above.
 
+**Staged rows are attributed by line number, never by content.** The painting
+is not cosmetic: once the queue drains, `stagedFor()` falls back to
+`app.staged`, and the next press builds its COMPLETE desired set from it and
+reset-then-applies it — so a row painted staged by mistake is a line the next
+toggle writes into the index. `computeStagedIndices` (`src/diff.ts`) therefore
+reads three diffs, each row in the numbering of the side it belongs to: a Del
+row is HEAD line `oldNum` and is staged iff `git diff --cached HEAD` deletes
+that line; an Add row is working-tree line `newNum` and is staged iff the
+index→worktree `git diff -U0` does NOT add it; a Ctx row never is. The version
+this replaced paired the cached diff's Add lines with the worktree diff's by
+`(anchor, text)`, consuming duplicates first-come, and inside any block with
+repeated lines — blanks, `}` — staging the tail painted every other row from
+the top; it also lost a line whenever git's slider heuristic aligned the two
+HEAD-based diffs differently. What the two diffs CAN still disagree on is which
+member of a run of identical adjacent lines is "the changed one"; the count is
+well-defined, and `reconcileRuns` settles it so the painting re-applies to the
+same blob. Two `''` traps are handled in `stagedIndicesFromDiffs`: an empty
+cached diff is "nothing staged" regardless of the other diff, and a `deleted
+file mode` cached diff means no index entry, so the blank index→worktree diff
+must not read as "every line is in the index". `test/staged-lines.test.ts` pins
+all of it, pure and against git, including the second press.
+
 **refiner always runs from the repo root.** `main()` calls `enterRepoRoot()`
 (`src/git.ts`) before anything touches the repo, and everything downstream assumes
 it. Domain paths — `ChangedFile.path`, `StoredThread.file`, the headers inside the
