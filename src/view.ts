@@ -159,13 +159,14 @@ export class View {
 
   /**
    * Keyboard focus follows state, applied after visibility has been settled for
-   * this frame. Focusing a hidden renderable is a silent no-op, so doing this
-   * imperatively when a modal opened meant the widget never actually received
-   * focus and every keystroke vanished.
+   * this frame. `focus()` on a hidden renderable is NOT a no-op in OpenTUI
+   * 0.5 — the widget takes the keys while drawing nothing — which is the other
+   * half of why visibility is settled first: a compose block a resize pushed
+   * off the pane must not keep the keyboard.
    */
   private syncWidgetFocus(): void {
     const app = this.app
-    if (app.compose !== null) this.composeInput.focus()
+    if (app.compose !== null && this.composeInput.visible) this.composeInput.focus()
     else this.composeInput.blur()
 
     if (app.finder !== null) this.finderInput.focus()

@@ -17,7 +17,7 @@
  */
 
 import { readFileSync, statSync } from 'node:fs'
-import { App, ViewMode, type Compose } from './app.ts'
+import { App, FileMode, ViewMode, type Compose } from './app.ts'
 import { Store } from './comments.ts'
 import type { SaveReport, StoredThread } from './comments.ts'
 import { anchorFor } from './relocate.ts'
@@ -56,17 +56,7 @@ function openCompose(app: App, compose: Compose, initial: string): void {
   app.threadsEpoch++
   app.inputs.setComposeValue(initial)
   app.selectionAnchor = -1
-  const layout = app.activeLayout()
-  const start = layout.composeStart
-  if (start < 0) return
-  const row = layout.rows[start]
-  const lines = row?.kind === 'compose' ? row.lines : 1
-  // Reveal the whole block: visible at its last row first, then the cursor
-  // goes back to the first, which ensureCursorVisible leaves alone if it fits.
-  app.contentCursor = start + lines - 1
-  app.ensureCursorVisible()
-  app.contentCursor = start
-  app.ensureCursorVisible()
+  app.revealCompose()
 }
 
 /**
@@ -340,7 +330,14 @@ export function handleCardKey(app: App, key: string): boolean {
  * tree does not list (CHANGES mode) after all of them, by path. Wraps.
  */
 export function nextThread(app: App, delta: 1 | -1): void {
-  const ordered = orderedThreads(app)
+  // In ALL mode the tree lists the whole repo, so a file it does not have is
+  // one that is not there — deleted and committed, ignored, a typo — and a
+  // jump onto it would park forever and leave `n` dead on the same target.
+  // CHANGES keeps every thread: switching to ALL is what reaches the rest.
+  const ordered =
+    app.fileMode === FileMode.All
+      ? orderedThreads(app).filter((t) => app.findFile(t.file) !== null)
+      : orderedThreads(app)
   if (ordered.length === 0) return
   const here = app.threadAtCursor()
   let i: number

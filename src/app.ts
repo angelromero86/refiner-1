@@ -272,6 +272,8 @@ export interface CursorIdentity {
   threadId: string
   /** The line within that card (or compose block). */
   line: number
+  /** The cursor was on the compose block, which has no id: it goes back onto it. */
+  compose: boolean
 }
 
 const NO_INPUTS: TextInputs = {
@@ -1163,8 +1165,8 @@ export class App {
   cursorIdentity(): CursorIdentity {
     const rows = this.activeLayout().rows
     const row = rows[this.contentCursor]
-    if (!row) return { diffIdx: -1, threadId: '', line: 0 }
-    if (row.kind === 'diff') return { diffIdx: row.idx, threadId: '', line: 0 }
+    if (!row) return { diffIdx: -1, threadId: '', line: 0, compose: false }
+    if (row.kind === 'diff') return { diffIdx: row.idx, threadId: '', line: 0, compose: false }
     let diffIdx = -1
     for (let d = this.contentCursor; d >= 0; d--) {
       const r = rows[d]!
@@ -1173,13 +1175,25 @@ export class App {
         break
       }
     }
-    return { diffIdx, threadId: row.kind === 'card' ? row.threadId : '', line: row.line }
+    return {
+      diffIdx,
+      threadId: row.kind === 'card' ? row.threadId : '',
+      line: row.line,
+      compose: row.kind === 'compose',
+    }
   }
 
   /** Put the cursor back on what `cursorIdentity()` described, in the layout as it is now. */
   restoreCursor(id: CursorIdentity): void {
     if (!this.cache.has(this.selectedPath)) return
+    const composeStart = id.compose && this.compose ? this.activeLayout().composeStart : -1
     const start = id.threadId === '' ? -1 : this.cardStartOf(id.threadId)
+    if (composeStart >= 0) {
+      this.contentCursor = composeStart + id.line
+      this.clampCursor()
+      this.revealCompose()
+      return
+    }
     if (start >= 0) {
       const row = this.activeLayout().rows[start]
       const lines = row?.kind === 'card' ? row.lines : 1
@@ -1189,6 +1203,25 @@ export class App {
       if (d >= 0) this.contentCursor = d
     }
     this.clampCursor()
+    this.ensureCursorVisible()
+  }
+
+  /**
+   * revealCompose scrolls so the WHOLE compose block is on screen, cursor on
+   * its first row. `ensureCursorVisible` only answers for one row, and a block
+   * half off the pane is a hidden textarea with the keyboard still in it — see
+   * `View.renderCompose`. Used when the block opens and again after anything
+   * that can move it: a resize, a reload, a relocation.
+   */
+  revealCompose(): void {
+    const layout = this.activeLayout()
+    const start = layout.composeStart
+    if (start < 0) return
+    const row = layout.rows[start]
+    const lines = row?.kind === 'compose' ? row.lines : 1
+    this.contentCursor = start + lines - 1
+    this.ensureCursorVisible()
+    this.contentCursor = start
     this.ensureCursorVisible()
   }
 
@@ -1325,8 +1358,13 @@ export class App {
     this.threadsEpoch++
     const file = this.findFile(t.file)
     if (!file) {
-      this.pendingJumpThread = t.id
-      if (this.fileMode === FileMode.Changes) void this.toggleFileMode()
+      if (this.fileMode === FileMode.Changes) {
+        this.pendingJumpThread = t.id
+        void this.toggleFileMode()
+      } else {
+        // ALL lists everything there is: this file is not in the repo.
+        this.err = new Error(`thread's file is not in the repo: ${t.file}`)
+      }
       return
     }
     if (this.selectedPath !== t.file) {
@@ -1434,10 +1472,13 @@ export class App {
     const h = this.paneInnerHeight()
     if (this.contentCursor < this.contentScroll) {
       this.contentScroll = this.contentCursor
-      return
-    }
-    if (this.contentCursor >= this.contentScroll + h) {
+    } else if (this.contentCursor >= this.contentScroll + h) {
       this.contentScroll = this.contentCursor - h + 1
+    }
+    // The row count shrinks whenever a card folds, resolves or goes away, and
+    // a scroll left past the new end paints one row and a pane of blanks.
+    if (this.cache.has(this.selectedPath)) {
+      this.contentScroll = Math.min(this.contentScroll, Math.max(0, this.displayRowCount() - h))
     }
     if (this.contentScroll < 0) this.contentScroll = 0
   }

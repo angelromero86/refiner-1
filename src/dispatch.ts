@@ -146,25 +146,40 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
       // rather than from the top of a list.
       app.themePicker = { cursor: app.themeIndex(), original: app.themeName }
       return true
+    // The five keys below change the pane's width, and with it the layout:
+    // cards re-wrap, so the row under the cursor moves or stops existing.
+    // `withStableCursor` keeps the cursor on the same thing.
     case 'b':
       // Toggle tree auto-hide: when on, the tree pane hides while content has
       // focus and reappears the moment focus returns to it (left arrow).
-      app.treeAutoHide = !app.treeAutoHide
+      app.withStableCursor(() => {
+        app.treeAutoHide = !app.treeAutoHide
+      })
       app.persistState()
       return true
     case '[':
-      app.treeWidthPct = Math.max(15, app.treeWidthPct - 5)
+      app.withStableCursor(() => {
+        app.treeWidthPct = Math.max(15, app.treeWidthPct - 5)
+      })
       app.persistState()
       return true
     case ']':
-      app.treeWidthPct = Math.min(70, app.treeWidthPct + 5)
+      app.withStableCursor(() => {
+        app.treeWidthPct = Math.min(70, app.treeWidthPct + 5)
+      })
       app.persistState()
       return true
     case 'left':
-      app.focus = Focus.Tree
+      app.withStableCursor(() => {
+        app.focus = Focus.Tree
+      })
       return true
     case 'right':
-      if (app.selectedPath !== '') app.focus = Focus.Content
+      if (app.selectedPath !== '') {
+        app.withStableCursor(() => {
+          app.focus = Focus.Content
+        })
+      }
       return true
     default:
       return false

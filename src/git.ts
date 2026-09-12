@@ -120,7 +120,8 @@ export async function loadAllFiles(source: Source): Promise<ChangedFile[]> {
   const out: ChangedFile[] = []
   const seen = new Set<string>()
   for (const path of r.stdout.split('\n')) {
-    if (path === '' || seen.has(path)) continue
+    // Same nested-repository entries as `parsePorcelain` skips.
+    if (path === '' || isNestedRepo(path) || seen.has(path)) continue
     seen.add(path)
     out.push(byPath.get(path) ?? { path, status: ' ', indexCode: ' ', workCode: ' ' })
   }
@@ -187,6 +188,11 @@ export function parsePorcelain(out: string): ChangedFile[] {
     const treeCode = xy[1]
 
     if (xy === '??') {
+      // A nested repository — a worktree parked inside the tree, a clone in a
+      // scratch folder — comes back as `??  dir/` even under
+      // `--untracked-files=all`. There is no file to diff or stage behind it,
+      // and the tree turned the trailing slash into a nameless child.
+      if (isNestedRepo(rest)) continue
       files.push({ status: '?', path: rest, indexCode, workCode: treeCode })
       continue
     }
@@ -194,6 +200,11 @@ export function parsePorcelain(out: string): ChangedFile[] {
     files.push({ status: normalizeStatus(code), path: rest, indexCode, workCode: treeCode })
   }
   return files
+}
+
+/** git lists a nested repository as a directory: the one path shape that ends in `/`. */
+function isNestedRepo(path: string): boolean {
+  return path.endsWith('/')
 }
 
 /** One line is one `<code>\t<path>` — see `parsePorcelain` on why never three columns. */

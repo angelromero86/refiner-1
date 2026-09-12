@@ -147,6 +147,13 @@ function normalize(parsed: unknown): StoreData {
     if (typeof t.range.end !== 'number') t.range.end = t.range.start
     if (!Array.isArray(t.comments)) t.comments = []
     if (t.status !== 'open' && t.status !== 'resolved') t.status = StatusOpen
+    // The cards render every body of the selected file, so a comment another
+    // client wrote without one is a crash inside render() and not a blank row.
+    for (const c of t.comments) {
+      if (typeof c !== 'object' || c === null) continue
+      if (typeof c.body !== 'string') c.body = ''
+      if (typeof c.author !== 'string') c.author = ''
+    }
   }
   return data
 }
@@ -438,11 +445,15 @@ export class Store {
     }
 
     const text = JSON.stringify(this.data, null, 2) + '\n'
+    // Ops logged while the bytes are on their way are NOT in `text`, and the
+    // next save may have to replay them onto somebody else's copy. Only what
+    // this write carries is retired.
+    const carried = this.pending.length
     await this.writeAtomic(text)
     // Only after the bytes are really there. Claiming a write that failed would
     // hand the watcher a witness for a file that never existed.
     this.lastSyncedText = text
-    this.pending = []
+    this.pending.splice(0, carried)
     this.writeSeq += 1
     return report
   }

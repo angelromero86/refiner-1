@@ -272,3 +272,25 @@ function everyNode(nodes: Node[]): Node[] {
   }
   return out
 }
+
+// ---------------------------------------------------------- nested repositories
+
+test('parsePorcelain skips a nested repository listed as a directory', () => {
+  const files = parsePorcelain('?? .claude/worktrees/wt/\n?? plain.txt\n')
+  expect(files.map((f) => f.path)).toEqual(['plain.txt'])
+})
+
+test('a worktree parked inside the tree lists no nameless file', async () => {
+  await Bun.write(join(dir, 'seed.txt'), 'seed\n')
+  await git(['add', '-A'])
+  await git(['commit', '-qm', 'base'])
+  await mkdir(join(dir, '.claude'), { recursive: true })
+  await git(['worktree', 'add', '-q', '.claude/wt', '-b', 'wt'])
+  await Bun.write(join(dir, 'loose.txt'), 'x\n')
+
+  const changed = await loadChangedFiles(SOURCE)
+  expect(changed.map((f) => f.path)).toEqual(['loose.txt'])
+  const all = await loadAllFiles(SOURCE)
+  for (const f of all) expect(f.path.endsWith('/')).toBe(false)
+  expect(all.map((f) => f.path)).toContain('seed.txt')
+})
