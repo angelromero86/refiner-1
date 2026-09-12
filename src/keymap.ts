@@ -71,7 +71,10 @@ export const KEYMAP: readonly KeySection[] = [
       { keys: 'D', what: 'on a card: delete the whole thread (asks first)' },
       { keys: 'z', what: 'expand every card in the file, or collapse them all' },
       { keys: 'n / N', what: 'next / previous thread, across files in tree order' },
-      { keys: 'c', what: 'list every thread in the repo — enter jumps to it (a thread holds one or more comments)' },
+      {
+        keys: 'c',
+        what: 'list every thread, grouped by file — enter jumps to it, x resolves or reopens it, o hides the resolved ones',
+      },
       { keys: 'alt+enter', what: 'save what you wrote (alt+s and ⌃s work too)' },
       { keys: 'esc', what: 'cancel writing' },
     ],

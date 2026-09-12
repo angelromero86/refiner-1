@@ -32,6 +32,7 @@ import { KEYMAP } from './keymap.ts'
 import type { StoredThread } from './comments.ts'
 import { LineKind } from './diff.ts'
 import { refreshFinder } from './finder.ts'
+import { threadListEntries, threadListThreads } from './threads-ui.ts'
 import type { Status } from './git.ts'
 import {
   chunksWidth,
@@ -41,9 +42,9 @@ import {
   splitSideWidth,
   type RowState,
 } from './render.ts'
-import { paintCardRow } from './card.ts'
+import { paintCardRow, severityStyle } from './card.ts'
 import { installCodeblockHighlighter } from './codeblocks.ts'
-import { firstLine } from './markdown.ts'
+import { firstLine, severityOf } from './markdown.ts'
 import { COMPOSE_H, COMPOSE_NEW_ROWS, type Layout } from './rows.ts'
 import { chunk, S, statusStyle, withBg, type Style } from './styles.ts'
 import { truncate, width as textWidth, wrapLine } from './text.ts'
@@ -1103,31 +1104,58 @@ export class View {
 
   private renderThreadList(): void {
     const app = this.app
-    if (!app.threadList) {
+    const list = app.threadList
+    if (!list) {
       this.listBox.visible = false
       return
     }
-    const threads = app.store.threads
+    const entries = threadListEntries(app, list.openOnly)
+    const threads = threadListThreads(entries)
     const contentW = Math.min(100, Math.max(40, Math.floor((app.width * 2) / 3)))
-    const contentH = Math.min(20, Math.max(5, app.height - 8))
+    const contentH = Math.min(24, Math.max(5, app.height - 8))
     const rowW = Math.max(1, contentW - 4)
 
     const rows: TextChunk[][] = []
-    rows.push([chunk(`Threads (${threads.length})`, S.appName)])
+    const open = app.store.threads.filter((t) => t.status !== 'resolved').length
+    const resolved = app.store.threads.length - open
+    const title: TextChunk[] = [chunk('Threads', S.appName), chunk(`  ${open} open`, S.dim)]
+    if (resolved > 0) title.push(chunk(` · ${resolved} resolved`, S.dim))
+    if (list.openOnly) title.push(chunk('  open only', S.hotkey))
+    rows.push(title)
     rows.push([])
 
     if (threads.length === 0) {
-      rows.push([chunk('No threads yet. Select lines in the diff and press enter.', S.dim)])
+      rows.push([
+        chunk(
+          list.openOnly && resolved > 0
+            ? 'Every thread is resolved. o shows them.'
+            : 'No threads yet. Select lines in the diff and press enter.',
+          S.dim,
+        ),
+      ])
     } else {
-      // Visible window centered on the cursor.
-      let start = Math.max(0, app.threadList.cursor - Math.floor(contentH / 2))
+      // The window is cut in ROWS, headings included, and centered on the row
+      // the cursor's thread sits on.
+      const cursorRow = entries.findIndex((e) => e.kind === 'thread' && e.index === list.cursor)
+      let start = Math.max(0, cursorRow - Math.floor(contentH / 2))
       let end = start + contentH
-      if (end > threads.length) {
-        end = threads.length
+      if (end > entries.length) {
+        end = entries.length
         start = Math.max(0, end - contentH)
       }
+      // Never open the window on a thread with its heading just out of sight:
+      // a row that starts with `L12` says nothing without the file above it.
+      if (start > 0 && entries[start]?.kind === 'thread' && entries[start - 1]?.kind === 'file') {
+        start--
+        end = Math.min(entries.length, start + contentH)
+      }
       for (let i = start; i < end; i++) {
-        rows.push(this.buildThreadListRow(threads[i], i === app.threadList.cursor, rowW))
+        const e = entries[i]!
+        rows.push(
+          e.kind === 'file'
+            ? this.buildThreadListHeading(e.path, e.count, rowW)
+            : this.buildThreadListRow(e.thread, e.index === list.cursor, rowW),
+        )
       }
     }
     rows.push([])
@@ -1136,6 +1164,10 @@ export class View {
       chunk(' navigate · ', S.dim),
       chunk('enter', S.hotkey),
       chunk(' go to thread · ', S.dim),
+      chunk('x', S.hotkey),
+      chunk(' resolve / reopen · ', S.dim),
+      chunk('o', S.hotkey),
+      chunk(list.openOnly ? ' show all · ' : ' open only · ', S.dim),
       chunk('esc', S.hotkey),
       chunk(' close', S.dim),
     ])
@@ -1150,43 +1182,47 @@ export class View {
     this.listBox.visible = true
   }
 
+  /** A file's heading in the thread list: the tree's `●`, its path, how many threads. */
+  private buildThreadListHeading(path: string, count: number, w: number): TextChunk[] {
+    return clampRow(
+      [chunk('● ', S.marker), chunk(path, S.dir), chunk(`  ${count}`, S.dim)],
+      w,
+    )
+  }
+
   /**
-   * One row per THREAD — status glyph, drift, where it is, who opened it, how
-   * many more comments are inside (`+N`, without which a thread reads as one
-   * comment), and the first line of the opener. An index into the pane, not a
-   * viewer: `enter` jumps to the card.
+   * One row per THREAD under its file's heading — status glyph, the severity
+   * of the opener, drift, its lines, who opened it, how many more comments are
+   * inside (`+N`, without which a thread reads as one comment), and the first
+   * line of the opener. An index into the pane, not a viewer: `enter` jumps to
+   * the card.
    */
   private buildThreadListRow(t: StoredThread, isCursor: boolean, w: number): TextChunk[] {
     const app = this.app
-    const loc = `${t.file}:${t.range.start}-${t.range.end}`
+    const loc = t.range.start === t.range.end ? `L${t.range.start}` : `L${t.range.start}-${t.range.end}`
     const first = t.comments[0]
     const author = first ? '@' + first.author : ''
+    const sev = first ? severityOf(first.body) : null
     const snippet = first ? firstLine(first.body) : ''
     const replies = Math.max(0, t.comments.length - 1)
     const resolved = t.status === 'resolved'
     const drift = app.threadDrift(t.id)
     const flag = drift?.status === 'lost' ? '[lost] ' : drift?.status === 'moved' ? '[moved] ' : ''
     const flagStyle = drift?.status === 'lost' ? S.del : S.dim
+    const muted = (style: Style): Style => (resolved ? S.dim : style)
+    const bg = isCursor ? S.palette.cursorBg : undefined
+    const paint = (style: Style): Style => (bg ? withBg(style, bg) : style)
 
-    if (isCursor) {
-      const bg = S.palette.cursorBg
-      const row: TextChunk[] = [
-        chunk('▶ ', { bg, fg: S.palette.accent, bold: true }),
-        chunk(resolved ? '✓ ' : '○ ', withBg(resolved ? S.dim : S.marker, bg)),
-      ]
-      if (flag) row.push(chunk(flag, withBg(flagStyle, bg)))
-      row.push(chunk(loc + '  ', { bg }), chunk(author, withBg(S.mode, bg)))
-      if (replies > 0) row.push(chunk(` +${replies}`, withBg(S.hotkey, bg)))
-      row.push(chunk('  ', { bg }), chunk(snippet, withBg(resolved ? S.dim : S.text, bg)))
-      return fitOverlayRow(row, w, { bg })
-    }
-
-    const row: TextChunk[] = [chunk('  '), chunk(resolved ? '✓ ' : '○ ', resolved ? S.dim : S.marker)]
-    if (flag) row.push(chunk(flag, flagStyle))
-    row.push(chunk(loc, resolved ? S.dim : S.dir), chunk('  '), chunk(author, resolved ? S.dim : S.mode))
-    if (replies > 0) row.push(chunk(` +${replies}`, S.hotkey))
-    row.push(chunk('  '), chunk(snippet, resolved ? S.dim : S.text))
-    return clampRow(row, w)
+    const row: TextChunk[] = [
+      isCursor ? chunk('  ▶ ', paint({ fg: S.palette.accent, bold: true })) : chunk('    '),
+      chunk(resolved ? '✓ ' : '○ ', paint(muted(S.marker))),
+    ]
+    if (sev) row.push(chunk(sev.tag + ' ', paint(muted(severityStyle(sev.tag)))))
+    if (flag) row.push(chunk(flag, paint(flagStyle)))
+    row.push(chunk(loc, paint(muted(S.dir))), chunk('  ', paint(S.text)), chunk(author, paint(muted(S.mode))))
+    if (replies > 0) row.push(chunk(` +${replies}`, paint(muted(S.hotkey))))
+    row.push(chunk('  ', paint(S.text)), chunk(snippet, paint(muted(S.text))))
+    return bg ? fitOverlayRow(row, w, { bg }) : clampRow(row, w)
   }
 
   private renderFinder(): void {

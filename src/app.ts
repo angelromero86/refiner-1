@@ -181,8 +181,16 @@ export type StagingJob =
 /** Shared empty result for `stagedFor`, so the hot render path allocates nothing. */
 const EMPTY_STAGED: ReadonlySet<number> = new Set<number>()
 
+/**
+ * The thread list (`c`). `cursor` indexes the THREADS the list shows — in tree
+ * order, grouped under their file, minus the resolved ones while `openOnly` —
+ * never the rows, since the file headers between them are not selectable.
+ * `openOnly` outlives the modal (`App.threadListOpenOnly`): a filter you set is
+ * a preference for the session, not for one look.
+ */
 export interface ThreadListModal {
   cursor: number
+  openOnly: boolean
 }
 
 /**
@@ -447,6 +455,8 @@ export class App {
   /** The most recent relocation pass, for callers that need it settled. */
   relocation: Promise<void> = Promise.resolve()
   threadList: ThreadListModal | null = null
+  /** Last `o` setting of the thread list; see `ThreadListModal.openOnly`. */
+  threadListOpenOnly = false
   compose: Compose | null = null
   /** Threads whose card shows every comment; the rest are collapsed. */
   expandedThreads = new Set<string>()

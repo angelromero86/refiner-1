@@ -23,6 +23,7 @@ import {
   handleCardKey,
   handleComposeKey,
   handleThreadListKey,
+  openThreadList,
   nextThread,
   openOrCreateThread,
 } from './threads-ui.ts'
@@ -115,7 +116,7 @@ function handleGlobalKey(app: App, renderer: CliRenderer, key: string): boolean 
       return true
     case 'c':
       // Reachable only when no other modal is open — route() checks those first.
-      app.threadList = { cursor: 0 }
+      openThreadList(app)
       return true
     case 'n':
       nextThread(app, 1)

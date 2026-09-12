@@ -380,29 +380,109 @@ function orderedThreads(app: App): StoredThread[] {
 
 // -------------------------------------------------------------- thread list
 
+/** A row of the thread list: a file heading, or one of its threads. */
+export type ThreadListEntry =
+  | { kind: 'file'; path: string; count: number }
+  | { kind: 'thread'; thread: StoredThread; index: number }
+
+/**
+ * threadListEntries lays the list out: the threads in tree order (the same
+ * order `n` walks), each file's threads under one heading, resolved ones left
+ * out while `openOnly`. `index` numbers the threads alone, which is what the
+ * modal's cursor counts.
+ */
+export function threadListEntries(app: App, openOnly: boolean): ThreadListEntry[] {
+  const out: ThreadListEntry[] = []
+  const threads = orderedThreads(app).filter((t) => !openOnly || t.status !== 'resolved')
+  let index = 0
+  let i = 0
+  while (i < threads.length) {
+    const path = threads[i]!.file
+    let j = i
+    while (j < threads.length && threads[j]!.file === path) j++
+    out.push({ kind: 'file', path, count: j - i })
+    for (; i < j; i++) out.push({ kind: 'thread', thread: threads[i]!, index: index++ })
+  }
+  return out
+}
+
+/** The threads of `entries`, in cursor order. */
+export function threadListThreads(entries: ThreadListEntry[]): StoredThread[] {
+  const out: StoredThread[] = []
+  for (const e of entries) if (e.kind === 'thread') out.push(e.thread)
+  return out
+}
+
+/**
+ * openThreadList is `c`: the list opens on the thread under the cursor, or
+ * failing that on the first thread of the selected file, so it starts where
+ * the reviewer is rather than at the top every time.
+ */
+export function openThreadList(app: App): void {
+  const openOnly = app.threadListOpenOnly
+  const threads = threadListThreads(threadListEntries(app, openOnly))
+  const here = app.threadAtCursor()
+  let cursor = here ? threads.findIndex((t) => t.id === here.id) : -1
+  if (cursor < 0) cursor = threads.findIndex((t) => t.file === app.selectedPath)
+  app.threadList = { cursor: Math.max(0, cursor), openOnly }
+}
+
 /** handleThreadListKey returns true when the key was consumed. */
 export function handleThreadListKey(app: App, key: string): boolean {
-  if (!app.threadList) return false
+  const list = app.threadList
+  if (!list) return false
   switch (key) {
     case 'esc':
     case 'c':
       app.threadList = null
       return true
+    case 'o': {
+      // Keep the cursor on the same thread across the filter when it survives
+      // it; otherwise the nearest one above.
+      const before = threadListThreads(threadListEntries(app, list.openOnly))
+      const current = before[list.cursor]
+      list.openOnly = !list.openOnly
+      app.threadListOpenOnly = list.openOnly
+      const after = threadListThreads(threadListEntries(app, list.openOnly))
+      const kept = current ? after.findIndex((t) => t.id === current.id) : -1
+      if (kept >= 0) list.cursor = kept
+      else {
+        const above = current ? before.slice(0, list.cursor).reverse() : []
+        const near = above.map((t) => after.findIndex((a) => a.id === t.id)).find((i) => i >= 0)
+        list.cursor = near ?? 0
+      }
+      return true
+    }
   }
-  const threads = app.store.threads
+  const threads = threadListThreads(threadListEntries(app, list.openOnly))
   if (threads.length === 0) return true
+  if (list.cursor >= threads.length) list.cursor = threads.length - 1
 
   switch (key) {
     case 'up':
-      if (app.threadList.cursor > 0) app.threadList.cursor--
+      if (list.cursor > 0) list.cursor--
       return true
     case 'down':
-      if (app.threadList.cursor < threads.length - 1) app.threadList.cursor++
+      if (list.cursor < threads.length - 1) list.cursor++
       return true
     case 'enter': {
-      const t = threads[app.threadList.cursor]
+      const t = threads[list.cursor]
       app.threadList = null
       if (t) app.jumpToThread(t)
+      return true
+    }
+    case 'x': {
+      // Resolve or reopen without leaving the list. Same rule as on the card:
+      // the card folds either way. Under `o` a resolved thread drops out of the
+      // list, and the cursor stays put — on the next thread along.
+      const t = threads[list.cursor]
+      if (!t || !threadsWritable(app)) return true
+      const resolved = t.status === 'resolved'
+      app.withStableCursor(() => {
+        app.store.setStatus(t.id, resolved ? 'open' : 'resolved')
+        app.expandedThreads.delete(t.id)
+      })
+      save(app)
       return true
     }
     default:
@@ -410,17 +490,6 @@ export function handleThreadListKey(app: App, key: string): boolean {
   }
 }
 
-/**
- * The text a new thread's anchor is captured from — the file as it is at the
- * moment the reviewer commits the comment, which is the moment the range was
- * chosen against. Synchronous on purpose: this runs inside the key dispatch,
- * where the thread must be added and the cursor re-pointed before the handler
- * returns, and a source file reads in microseconds. Null when the file is not
- * there or is too large to be a source file; the thread is then created
- * without an anchor and the next relocation pass backfills one.
- *
- * `file` is root-relative and resolves against the cwd, like every other read.
- */
 function readWorkingTree(file: string): string | null {
   const MAX_BYTES = 2 * 1024 * 1024
   try {
@@ -491,7 +560,7 @@ function reanchor(app: App): Error | null {
     lost = new Error('the thread you were writing in was deleted by another client')
   }
   if (app.threadList) {
-    const n = app.store.threads.length
+    const n = threadListThreads(threadListEntries(app, app.threadList.openOnly)).length
     if (app.threadList.cursor >= n) app.threadList.cursor = Math.max(0, n - 1)
   }
   return lost

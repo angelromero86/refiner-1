@@ -122,6 +122,6 @@ test('componer bloquea la recarga; leer un thread no', () => {
   app.confirm = { title: '', yes: '', no: '', onYes: () => {} }
   expect(overlayOpen(app)).toBe(true)
   app.confirm = null
-  app.threadList = { cursor: 0 }
+  app.threadList = { cursor: 0, openOnly: false }
   expect(overlayOpen(app)).toBe(true)
 })

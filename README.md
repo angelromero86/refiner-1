@@ -242,7 +242,7 @@ orden. La fuente de verdad es [`src/keymap.ts`](src/keymap.ts).
 | `D` | Sobre una tarjeta: borrar el thread entero (pide confirmación) |
 | `z` | Desplegar todas las tarjetas del fichero, o plegarlas todas |
 | `n` / `N` | Siguiente / anterior thread, cruzando ficheros en el orden del árbol |
-| `c` | Listar todos los threads del repo — `enter` salta a la tarjeta (un thread contiene uno o más comentarios) |
+| `c` | Listar todos los threads del repo, agrupados por fichero — `enter` salta a la tarjeta, `x` resuelve o reabre, `o` oculta los resueltos |
 | `alt+enter` | Guardar lo que has escrito (`alt+s` y `⌃s` también valen) |
 | `esc` | Cancelar la escritura |
 
@@ -265,8 +265,10 @@ Dentro de cada overlay, además:
 
 - **Picker de ficheros** (`p`): `↑↓` o `⌃p` / `⌃n` para moverte, `enter` abre, `esc`
   cierra. Todo lo demás va al campo de texto.
-- **Lista de threads** (`c`): `↑↓`, `enter` salta a la tarjeta del thread, `esc` o
-  `c` cierran.
+- **Lista de threads** (`c`): se abre sobre el thread bajo el cursor, agrupada por
+  fichero en el orden del árbol, con el badge de severidad de cada uno. `↑↓`,
+  `enter` salta a la tarjeta, `x` resuelve o reabre sin salir, `o` alterna entre
+  solo abiertos y todos (se recuerda durante la sesión), `esc` o `c` cierran.
 - **Ayuda** (`k`): `↑↓`, `⌃u` / `⌃d`, `home`; `esc`, `k`, `?` o `q` cierran.
 - **Temas** (`t`): `↑↓` previsualiza, `enter` guarda la elección, `esc`, `t` o `q`
   restauran el tema anterior.

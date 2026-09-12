@@ -16,7 +16,14 @@ import { join } from 'node:path'
 import type { App } from '../src/app.ts'
 import { Store, type StoredThread } from '../src/comments.ts'
 import { route } from '../src/dispatch.ts'
-import { handleCardKey, openOrCreateThread, persistStore, submitCompose } from '../src/threads-ui.ts'
+import {
+  handleCardKey,
+  openOrCreateThread,
+  persistStore,
+  submitCompose,
+  threadListEntries,
+  threadListThreads,
+} from '../src/threads-ui.ts'
 import { FILE, diffOf, openPane, thread } from './pane.ts'
 
 let dir = ''
@@ -370,4 +377,56 @@ test('a new thread on a file that cannot be read is created without an anchor', 
   const created = app.store.threads[0]
   expect('anchor' in created).toBe(false)
   expect(created.range).toEqual({ start: 4, end: 5 })
+})
+
+// -------------------------------------------------------------- thread list
+
+test('the list groups threads under their file, in tree order, resolved ones filtered by o', async () => {
+  const other = diffOf([' a', ' b', ' c'])
+  await writeStore([
+    thread('t-B', 4, 4, { status: 'resolved' }),
+    { ...thread('t-Z', 2, 2), file: 'src/z.ts' },
+    thread('t-A', 1, 1, { bodies: ['[must-fix] bad'] }),
+  ])
+  const app = openPane({ store: await Store.load(storePath), files: [{ path: 'src/z.ts', diff: other }] })
+  press(app, 'c')
+  expect(app.threadList).toEqual({ cursor: 0, openOnly: false })
+  const entries = threadListEntries(app, false)
+  expect(entries.map((e) => (e.kind === 'file' ? `#${e.path}` : e.thread.id))).toEqual([
+    `#${FILE}`,
+    't-A',
+    't-B',
+    '#src/z.ts',
+    't-Z',
+  ])
+  press(app, 'down', 'down')
+  expect(app.threadList?.cursor).toBe(2)
+  press(app, 'o')
+  expect(app.threadListOpenOnly).toBe(true)
+  expect(threadListThreads(threadListEntries(app, true)).map((t) => t.id)).toEqual(['t-A', 't-Z'])
+  // t-Z survives the filter, so the cursor follows it.
+  expect(app.threadList?.cursor).toBe(1)
+  press(app, 'esc')
+  expect(app.threadList).toBeNull()
+  // The filter is remembered for the next `c`.
+  press(app, 'c')
+  expect(app.threadList?.openOnly).toBe(true)
+})
+
+test('the list opens on the thread under the cursor, and x resolves from inside it', async () => {
+  const app = await paneOn([thread('t-A', 1, 1), thread('t-B', 4, 4)])
+  onCard(app, 't-B')
+  press(app, 'c')
+  expect(app.threadList?.cursor).toBe(1)
+  press(app, 'x')
+  await settle(app)
+  expect(app.store.threads.find((t) => t.id === 't-B')?.status).toBe('resolved')
+  expect(app.threadList).not.toBeNull()
+  press(app, 'x')
+  await settle(app)
+  expect(app.store.threads.find((t) => t.id === 't-B')?.status).toBe('open')
+  press(app, 'enter')
+  expect(app.threadList).toBeNull()
+  expect(app.threadAtCursor()?.id).toBe('t-B')
+  expect(app.expandedThreads.has('t-B')).toBe(true)
 })
