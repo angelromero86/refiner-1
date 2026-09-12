@@ -12,9 +12,11 @@
  * pressed `r`.
  */
 
+import { readFileSync, statSync } from 'node:fs'
 import { App, Focus, ModalMode, ViewMode, type ThreadModal } from './app.ts'
 import { Store } from './comments.ts'
 import type { SaveReport, StoredThread } from './comments.ts'
+import { anchorFor } from './relocate.ts'
 
 export function newThreadModal(
   threadIdx: number,
@@ -340,11 +342,14 @@ export function submitModalCompose(app: App): void {
       modal.selectedComment = t.comments.length - 1
     }
   } else {
-    const t = app.store.addThread(modal.newThreadFile, modal.newThreadStart, modal.newThreadEnd, {
-      author: app.author,
-      body,
-      role: 'user',
-    })
+    const { newThreadFile: file, newThreadStart: start, newThreadEnd: end } = modal
+    const t = app.store.addThread(
+      file,
+      start,
+      end,
+      { author: app.author, body, role: 'user' },
+      anchorFor(readWorkingTree(file), start, end),
+    )
     const idx = app.store.indexOfThread(t.id)
     if (idx >= 0) {
       modal.threadIdx = idx
@@ -360,30 +365,65 @@ export function submitModalCompose(app: App): void {
 }
 
 /**
+ * The text a new thread's anchor is captured from — the file as it is at the
+ * moment the reviewer commits the comment, which is the moment the range was
+ * chosen against. Synchronous on purpose: this runs inside the key dispatch,
+ * where the thread must be added and the modal re-pointed before the handler
+ * returns, and a source file reads in microseconds. Null when the file is not
+ * there or is too large to be a source file; the thread is then created
+ * without an anchor and the next relocation pass backfills one.
+ *
+ * `file` is root-relative and resolves against the cwd, like every other read.
+ */
+function readWorkingTree(file: string): string | null {
+  const MAX_BYTES = 2 * 1024 * 1024
+  try {
+    if (statSync(file).size > MAX_BYTES) return null
+    return readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+}
+
+/**
  * save persists the store, surfacing failures in the error banner. Losing a
  * comment silently would be much worse than a visible warning.
  *
  * Fire and forget: the in-memory store is already updated, so the UI is correct
- * the moment this is called; only the disk write is still in flight. What is NOT
- * settled yet is which thread lives at which index — a save that finds the file
- * changed rebuilds `store.threads` from disk — so the ids the UI is pointing at
- * are captured here, synchronously, and resolved back to indices afterwards.
+ * the moment this is called; only the disk write is still in flight.
  */
 function save(app: App): void {
+  void persistStore(app)
+}
+
+/**
+ * persistStore is `save` for callers that need to know when the write is done
+ * (`src/relocate.ts`, which writes corrected ranges and then re-renders).
+ *
+ * What is NOT settled while the write is in flight is which thread lives at
+ * which index — a save that finds the file changed rebuilds `store.threads`
+ * from disk — so the ids the UI is pointing at are captured here, before the
+ * first await, and resolved back to indices afterwards.
+ *
+ * `quiet` is for writes the reviewer did not ask for: a relocation must not
+ * clear a banner somebody else put up (the same rule as `loadFiles()`, which
+ * never clears `err`), so it only touches the banner to report a merge that
+ * dropped or overwrote something. Never rejects.
+ */
+export async function persistStore(app: App, opts: { quiet?: boolean } = {}): Promise<void> {
   const anchors = captureAnchors(app)
-  void app.store
-    .save()
-    .then((report) => {
-      if (report.merged) reanchor(app, anchors)
-      // Only a clean save clears the banner: a merge that had to drop or
-      // overwrite something is exactly the news the reviewer must not miss.
-      app.err = mergeNotice(report)
-      if (report.merged || app.err !== null) app.render()
-    })
-    .catch((err: unknown) => {
-      app.err = err as Error
-      app.render()
-    })
+  try {
+    const report = await app.store.save()
+    if (report.merged) reanchor(app, anchors)
+    // Only a clean save clears the banner: a merge that had to drop or
+    // overwrite something is exactly the news the reviewer must not miss.
+    const notice = mergeNotice(report)
+    if (notice !== null || !opts.quiet) app.err = notice
+    if (report.merged || notice !== null) app.render()
+  } catch (err) {
+    app.err = err as Error
+    app.render()
+  }
 }
 
 /** The ids the open overlays are pointing at, taken before a save can move them. */

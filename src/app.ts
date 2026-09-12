@@ -47,6 +47,7 @@ import {
 } from './git.ts'
 import { build as buildTree, flatten, type FlatNode, type Node } from './tree.ts'
 import { Store, type StoredThread } from './comments.ts'
+import { relocateThreads, type Drift } from './relocate.ts'
 import { highlightDiff, NO_HIGHLIGHTS, type DiffHighlights } from './syntax.ts'
 import { defaultUIState, loadState, saveState } from './state.ts'
 import {
@@ -383,6 +384,11 @@ export class App {
    */
   private loadGen = 0
 
+  /** The current generation, for loads that live outside this class (`src/relocate.ts`). */
+  loadGeneration(): number {
+    return this.loadGen
+  }
+
   // ----------------------------------------------------------- staging queue
   // Written synchronously by the key handler, consumed by the serial drain in
   // `src/staging.ts`.
@@ -410,6 +416,16 @@ export class App {
 
   /** The review-thread store — `store.threads`, each holding `comments`. */
   store: Store
+  /**
+   * Where each thread stands against the working tree, by thread id, as of the
+   * last relocation pass (`src/relocate.ts`). In memory only: on disk a moved
+   * thread's range simply IS its corrected range.
+   */
+  drift = new Map<string, Drift>()
+  /** The store `drift` describes; a different one means a fresh baseline. */
+  driftStore: Store | null = null
+  /** The most recent relocation pass, for callers that need it settled. */
+  relocation: Promise<void> = Promise.resolve()
   modal: ThreadModal | null = null
   threadList: ThreadListModal | null = null
   finder: FinderModal | null = null
@@ -616,6 +632,11 @@ export class App {
     // `gen` is what makes its result discardable. See `loadGen`.
     const gen = this.loadGen
     const mode = this.fileMode
+    // Threads are re-anchored alongside the git call — independent work under
+    // the same generation — and awaited below so the corrected ranges are on
+    // screen with the tree. See `src/relocate.ts`.
+    const relocated = relocateThreads(this)
+    this.relocation = relocated
     let files: ChangedFile[]
     try {
       files = await this.listFiles(mode)
@@ -629,6 +650,7 @@ export class App {
       this.render()
       return
     }
+    await relocated
     // One guard, above the WHOLE application block: the cursor clamp and the
     // selection handling below belong to the current tree as much as `files`
     // does, and a stale load must touch neither.
@@ -775,6 +797,9 @@ export class App {
       })
       if (stagedIdx) this.staged.set(file.path, stagedIdx)
       else this.staged.delete(file.path)
+      // The file was just read by git; its threads follow. Not awaited — the
+      // diff paints now and the pass re-renders if anything moved.
+      this.relocation = relocateThreads(this, [file.path])
 
       // Preserve cursor/scroll across reloads (staging, resize, refresh); clamp
       // to the new row count and drop a stale selection.
@@ -1232,42 +1257,26 @@ export class App {
     return this.store.hasThreadsFor(path)
   }
 
+  /** Where `id` stands against the working tree, or null before any pass has seen it. */
+  threadDrift(id: string): Drift | null {
+    return this.drift.get(id) ?? null
+  }
+
   /**
-   * isThreadOutdated reports whether a thread can no longer be reached from the
-   * current diff. Two heuristics, cheapest first:
+   * isThreadOutdated reports whether a thread's code can no longer be found in
+   * the working tree — `lost` in the drift map, which the relocation passes
+   * keep current (`src/relocate.ts`). A thread no pass has seen yet (one just
+   * created) is not outdated.
    *
-   *   1. The file isn't in the current change set (committed, reverted, or out
-   *      of scope) — the reviewer can't see what the thread was anchored to.
-   *   2. The file is on disk but shorter than the thread's end line — the
-   *      anchored lines literally aren't there.
+   * Deliberately NOT "the file isn't in the change set": in ALL mode a thread
+   * can legitimately sit on a file nobody has touched, and flagging those as
+   * stale would make the whole feature look broken.
    *
-   * Both miss the case where the file is still in the diff but the commented
-   * CONTENT moved. The VSCode extension solves that with its `anchor` snapshot;
-   * refiner preserves that field but doesn't yet use it here.
-   *
-   * Reads the file from disk, so only call it from rare paths (modals, the
-   * thread list) — never from per-row render code.
+   * Async only because `src/view.ts` awaits it from the days it read the file
+   * itself; it costs nothing now.
    */
   async isThreadOutdated(t: StoredThread): Promise<boolean> {
-    // Deliberately NOT "the file isn't in the change set": in ALL mode a thread can
-    // legitimately sit on a file nobody has touched, and flagging those as stale
-    // would make the whole feature look broken.
-    try {
-      // Same as `readAsContext`: `t.file` is repo-root-relative and only opens
-      // because the process sits at the root. From anywhere else nothing exists
-      // and every thread in the repo would be declared outdated.
-      const file = Bun.file(t.file)
-      if (!(await file.exists())) return true
-      const data = await file.text()
-      let count = 0
-      for (let i = 0; i < data.length; i++) {
-        if (data[i] === '\n') count++
-      }
-      if (data.length > 0 && !data.endsWith('\n')) count++
-      return t.range.end > count
-    } catch {
-      return true
-    }
+    return this.drift.get(t.id)?.status === 'lost'
   }
 
   // ---------------------------------------------------------------- labels

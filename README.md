@@ -474,7 +474,7 @@ cuenta.
           "createdAt": "2026-07-31T22:44:09.025Z"   // ISO-8601
         }
       ],
-      "anchor": { "lines": [], "before": [], "after": [] }  // opcional; lo mantiene VSCode
+      "anchor": { "lines": [], "before": [], "after": [] }  // opcional; lo mantienen refiner y VSCode
     }
   ]
 }
@@ -482,10 +482,12 @@ cuenta.
 
 Reglas del formato:
 
-- **`anchor` es el snapshot de contenido** que la extensión usa para reanclar threads
-  cuando el código se mueve. refiner **no** lo escribe, pero lo preserva intacto al
-  guardar — si lo borrara, el editor perdería la capacidad de seguir el thread. Lo
-  mismo vale para cualquier campo que no reconozcas: se conserva.
+- **`anchor` es el snapshot de contenido** (las líneas del thread más tres de
+  contexto a cada lado) con el que refiner y la extensión reanclan los threads
+  cuando el código se mueve: los dos lo capturan al crear un thread, lo rellenan si
+  falta y corrigen `range` cuando encuentran el texto en otra línea. Un thread cuyo
+  texto ya no aparece se marca `outdated` en el TUI y conserva su `range`. Los
+  agentes **no** lo escriben. Cualquier campo que no reconozcas se conserva.
 - **Serialización**: `JSON.stringify(data, null, 2)` más un `\n` final. Es
   literalmente lo que escriben refiner y la extensión, así que no se pelean por el
   whitespace en git; escribe igual desde un agente.

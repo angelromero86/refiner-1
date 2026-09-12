@@ -66,8 +66,11 @@ You add a reply by **appending** a comment to that thread's `comments` array:
 - `id` — unique. Use `c-` + 8 hex: `python3 -c "import secrets; print(secrets.token_hex(4))"`.
 - `createdAt` — ISO-8601 UTC (current time).
 - Leave `status`, `range`, `file`, the human's comments, and any `anchor` field
-  untouched. Append only. (`anchor` is the content snapshot the VSCode extension uses
-  to keep a thread attached as code moves; dropping it degrades that silently.)
+  untouched. Append only. (`anchor` is the content snapshot both the TUI and the
+  VSCode extension use to keep a thread attached as code moves — after you apply a
+  fix, the client the human opens next relocates the thread onto the edited code
+  and rewrites `range` itself. Dropping or editing the anchor degrades that
+  silently; a `range` you corrected by hand would be overwritten anyway.)
 
 ## Formatting the `body`
 
@@ -191,7 +194,8 @@ Summarize for the user:
 
 - Do **not** change `status` on any thread. Leave it `"open"`.
 - Do **not** delete any thread or comment — yours or the human's.
-- Do **not** edit the human's comments, the `range`, `file`, or `anchor` fields.
+- Do **not** edit the human's comments, the `range`, `file`, or `anchor` fields —
+  the TUI and the extension re-anchor threads to your edits on their own.
 - Do **not** batch unrelated changes under one thread's reply.
 - Do **not** skip verification. If your change doesn't build/pass, fix it first.
 - Do **not** leave the JSON invalid. Re-read your write and confirm it parses.

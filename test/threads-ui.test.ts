@@ -202,3 +202,44 @@ test('a new thread remembers its id, so its first reply re-anchors too', async (
   expect(app.store.threads[app.modal!.threadIdx].comments).toHaveLength(2)
   expect(await readThreadIds()).toEqual(['t-Z', created.id])
 })
+
+// ------------------------------------------------------------ drift anchor
+
+test('a new thread carries an anchor captured from the working tree', async () => {
+  await writeStore([])
+  // The read is cwd-relative, like every file access in refiner.
+  const cwd = process.cwd()
+  process.chdir(dir)
+  try {
+    await Bun.write(join(dir, 'b.ts'), 'l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8\nl9\n')
+    const { app, setCompose } = await makeApp()
+    app.modal = newThreadModal(-1, '', 'b.ts', 4, 5)
+    setCompose('hilo con anchor')
+    submitModalCompose(app)
+    await settle(app)
+
+    const created = app.store.threads[app.modal!.threadIdx]
+    expect(created.anchor).toEqual({
+      lines: ['l4', 'l5'],
+      before: ['l1', 'l2', 'l3'],
+      after: ['l6', 'l7', 'l8'],
+    })
+    const disk = JSON.parse(await Bun.file(storePath).text())
+    expect(disk.threads[0].anchor).toEqual(created.anchor)
+  } finally {
+    process.chdir(cwd)
+  }
+})
+
+test('a new thread on a file that cannot be read is created without an anchor', async () => {
+  await writeStore([])
+  const { app, setCompose } = await makeApp()
+  app.modal = newThreadModal(-1, '', 'does-not-exist.ts', 4, 5)
+  setCompose('sin anchor')
+  submitModalCompose(app)
+  await settle(app)
+
+  const created = app.store.threads[app.modal!.threadIdx]
+  expect('anchor' in created).toBe(false)
+  expect(created.range).toEqual({ start: 4, end: 5 })
+})

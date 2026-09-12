@@ -63,10 +63,13 @@ Field rules:
 - `status` — always `"open"` (see the rule below).
 - `role` — always `"assistant"` for threads you create.
 - `createdAt` — ISO-8601 UTC (current time).
-- **Do NOT write an `anchor` field.** The VSCode extension captures it automatically
-  the first time the human opens the file, and uses it to keep a thread attached as
-  the code moves. The TUI never authors it but preserves it byte for byte. Leaving it
-  out is correct.
+- **Do NOT write an `anchor` field.** It is a snapshot of the anchored lines plus
+  context, used to keep a thread attached as the code moves, and both human-facing
+  clients maintain it: the VSCode extension when the human opens the file, the TUI
+  on its next load. Either one backfills a thread that has none and moves `range`
+  when the code moves. You have no reliable view of the working tree at the moment
+  the human will read the thread, so an anchor from you is worse than none. Leaving
+  it out is correct.
 
 Severity prefix in `body` (use exactly one, in brackets, at the start):
 - `[must-fix]` — bug, security issue, data loss
@@ -216,7 +219,7 @@ Tell the user:
 - Do **not** modify code. This skill only writes review threads — fixes are
   `/refine-resolve`'s job.
 - Do **not** set `status` to `"resolved"`. Always `"open"`.
-- Do **not** write an `anchor` field — the extension manages it.
+- Do **not** write an `anchor` field — the TUI and the extension manage it.
 - Do **not** rewrite, reorder, or delete existing threads/comments. Append only.
 - Do **not** flag style/linter issues or pre-existing problems in unchanged code.
   Focus on the diff.
