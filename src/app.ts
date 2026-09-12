@@ -19,7 +19,6 @@
 
 import {
   align,
-  computeStagedIndices,
   contextOnly,
   creationMode,
   deletionMode,
@@ -29,6 +28,7 @@ import {
   filterCurrentView,
   LineKind,
   parse,
+  stagedIndicesFromDiffs,
   type AlignedRow,
   type Line,
 } from './diff.ts'
@@ -39,6 +39,7 @@ import {
   loadChangedFiles,
   loadDiff,
   loadStagedDiff,
+  loadUnstagedDiff,
   Mode,
   repoName as gitRepoName,
   type ChangedFile,
@@ -670,9 +671,16 @@ export class App {
   }
 
   /**
-   * loadDiffPair runs the working-tree diff and the index diff concurrently and
-   * derives the staged-line indices from the pair. Shared by the UI refresh and
-   * the full-file stage/unstage decision. `protected` so a test can gate it.
+   * loadDiffPair runs the working-tree diff and the two index diffs
+   * concurrently and derives the staged-line indices from them. Shared by the
+   * UI refresh and the full-file stage/unstage decision. `protected` so a test
+   * can gate it.
+   *
+   * Three diffs, because the staged set is attributed by line number and each
+   * kind of row is numbered on a different side: a Del row is HEAD line
+   * `oldNum`, staged iff `git diff --cached HEAD` deletes that line; an Add row
+   * is working-tree line `newNum`, staged iff the index→worktree `git diff`
+   * does NOT add it. Never by content — see `computeStagedIndices`.
    */
   protected async loadDiffPair(file: ChangedFile): Promise<{
     combined: Line[]
@@ -693,9 +701,10 @@ export class App {
         deleteMode: null,
       }
     }
-    const [combinedText, stagedText] = await Promise.all([
+    const [combinedText, stagedText, unstagedText] = await Promise.all([
       loadDiff(this.source, file),
       loadStagedDiff(this.source, file).catch(() => ''),
+      loadUnstagedDiff(this.source, file),
     ])
     const combined = filterContentLines(parse(combinedText))
     const aligned = align(combined)
@@ -709,10 +718,7 @@ export class App {
     // and one they truncated to zero bytes leave identical `Line[]`, and only
     // the header separates "remove the entry" from "stage an empty blob".
     const deleteMode = deletionMode(combinedText)
-    let stagedIdx: Set<number> | null = null
-    if (stagedText !== '') {
-      stagedIdx = computeStagedIndices(combined, filterContentLines(parse(stagedText)))
-    }
+    const stagedIdx = stagedIndicesFromDiffs(combined, stagedText, unstagedText)
     return { combined, aligned, stagedIdx, createMode, deleteMode }
   }
 

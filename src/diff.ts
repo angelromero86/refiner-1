@@ -62,61 +62,187 @@ function line(kind: LineKind, text: string, oldNum = 0, newNum = 0): Line {
 }
 
 /**
- * computeStagedIndices returns the set of indices in `combined` whose line is
- * also present in `staged`. Both inputs are filtered (ctx/del/add only) and
- * share the same HEAD reference. Del lines are matched by oldNum; add lines by
- * (anchor=previous ctx/del oldNum, content) — duplicates are matched in order.
+ * delOldNums collects the HEAD-side line numbers of every Del line — for
+ * `git diff --cached HEAD`, the HEAD lines the index no longer has.
  */
-export function computeStagedIndices(combined: Line[], staged: Line[]): Set<number> {
+export function delOldNums(lines: Line[]): Set<number> {
   const out = new Set<number>()
-  if (combined.length === 0 || staged.length === 0) return out
+  for (const l of lines) if (l.kind === LineKind.Del) out.add(l.oldNum)
+  return out
+}
 
-  const stagedDels = new Set<number>()
-  // Key is `${anchor}\0${content}` — a struct key in Go, a joined string here.
-  const stagedAddCount = new Map<string, number>()
-  const addKey = (anchor: number, content: string) => `${anchor}\0${content}`
+/**
+ * addNewNums collects the new-side line numbers of every Add line — for the
+ * index→worktree `git diff`, the working-tree lines the index does not have.
+ */
+export function addNewNums(lines: Line[]): Set<number> {
+  const out = new Set<number>()
+  for (const l of lines) if (l.kind === LineKind.Add) out.add(l.newNum)
+  return out
+}
 
-  let anchor = 0
-  for (const l of staged) {
-    switch (l.kind) {
-      case LineKind.Ctx:
-        anchor = l.oldNum
-        break
-      case LineKind.Del:
-        stagedDels.add(l.oldNum)
-        anchor = l.oldNum
-        break
-      case LineKind.Add: {
-        const key = addKey(anchor, stripPrefix(l.text, '+'))
-        stagedAddCount.set(key, (stagedAddCount.get(key) ?? 0) + 1)
-        break
-      }
-    }
-  }
-
-  anchor = 0
+/**
+ * computeStagedIndices returns the indices in `combined` (the filtered
+ * HEAD→worktree diff) whose change is already in the index.
+ *
+ * The attribution is by LINE NUMBER, never by content, and each side has its
+ * own numbering to be attributed in:
+ *
+ *   - a Del row is a HEAD line, and it is staged iff that HEAD line is gone
+ *     from the index — `stagedDelOldNums`, the Del `oldNum`s of
+ *     `git diff --cached HEAD`;
+ *   - an Add row is a working-tree line, and it is staged iff that line is
+ *     already in the index, i.e. NOT among the lines the index→worktree diff
+ *     adds — `unstagedAddNewNums`, the Add `newNum`s of a plain `git diff`;
+ *   - a Ctx row is never staged.
+ *
+ * Content matching is what this replaced, and it is forbidden here for a
+ * reason that is not cosmetic. The previous version paired Add rows with the
+ * cached diff's Add lines by `(anchor, text)`, consuming duplicates in order —
+ * so inside one block of added lines every repeated line (blank, `}`, `})`)
+ * was claimed by the FIRST row with that text, and staging the tail of a block
+ * painted every other row from its top instead. It was also wrong whenever
+ * git's slider heuristic aligned the cached diff differently from the worktree
+ * one, at which point a staged line simply vanished from the painting.
+ * Then `drain()` cleared the intent, `stagedFor()` fell back to this answer,
+ * and the next `toggleStaged` built its complete desired set from it and
+ * reset-then-applied — a genuinely corrupt index, from a rendering bug.
+ *
+ * Line numbers cannot go wrong that way: a worktree line is in the index or it
+ * is not, whatever its neighbours say. What CAN differ between the two diffs
+ * is which member of a run of identical lines git calls "the added one" — and
+ * `reconcileRuns` folds that back, see there. An identical line repeated
+ * elsewhere in the file, NOT adjacent, is the one case left where the two
+ * diffs can disagree unresolvably — inherent to describing one index through
+ * two diffs, and out of reach of anything short of reconciling against the
+ * index blob itself.
+ */
+export function computeStagedIndices(
+  combined: Line[],
+  stagedDelOldNums: ReadonlySet<number>,
+  unstagedAddNewNums: ReadonlySet<number>,
+): Set<number> {
+  const out = new Set<number>()
   for (let i = 0; i < combined.length; i++) {
     const l = combined[i]
-    switch (l.kind) {
-      case LineKind.Ctx:
-        anchor = l.oldNum
-        break
-      case LineKind.Del:
-        if (stagedDels.has(l.oldNum)) out.add(i)
-        anchor = l.oldNum
-        break
-      case LineKind.Add: {
-        const key = addKey(anchor, stripPrefix(l.text, '+'))
-        const n = stagedAddCount.get(key) ?? 0
-        if (n > 0) {
-          stagedAddCount.set(key, n - 1)
-          out.add(i)
-        }
-        break
+    if (l.kind === LineKind.Del && stagedDelOldNums.has(l.oldNum)) out.add(i)
+    else if (l.kind === LineKind.Add && !unstagedAddNewNums.has(l.newNum)) out.add(i)
+  }
+  // Dels live in HEAD's numbering; Adds in the working tree's. The HEAD
+  // sequence is the Ctx and Del rows in order, the worktree sequence the Ctx
+  // and Add rows — each in the numbering its side is attributed in.
+  reconcileRuns(
+    combined,
+    out,
+    LineKind.Del,
+    (l) => l.kind !== LineKind.Add,
+    (l) => stagedDelOldNums.has(l.oldNum),
+    (dels, hits) => Math.min(dels, hits),
+  )
+  reconcileRuns(
+    combined,
+    out,
+    LineKind.Add,
+    (l) => l.kind !== LineKind.Del,
+    (l) => unstagedAddNewNums.has(l.newNum),
+    (adds, hits) => Math.max(0, adds - hits),
+  )
+  return out
+}
+
+/**
+ * stagedIndicesFromDiffs is `computeStagedIndices` fed from git's raw answers:
+ * `stagedText` is `git diff --cached HEAD -- <path>` and `unstagedText` the
+ * index→worktree `git diff -U0 -- <path>`, both for the file `combined` came
+ * from. Null means nothing is staged, which is what `App.staged` stores as an
+ * absent entry.
+ *
+ * The two `''` cases are the point of having this in one place. An empty
+ * cached diff is "index equals HEAD": nothing staged, whatever the other diff
+ * says — and for an untracked file it says nothing at all, which read naively
+ * is "every line is in the index". One step later the same trap again: a file
+ * whose DELETION is staged has no index entry either, so the index→worktree
+ * diff is blank even when the working tree has the file back, and only the
+ * cached diff's own header (`deleted file mode`) tells that apart from "the
+ * working tree matches the index". Then every Add row is unstaged by
+ * definition.
+ */
+export function stagedIndicesFromDiffs(
+  combined: Line[],
+  stagedText: string,
+  unstagedText: string,
+): Set<number> | null {
+  if (stagedText === '') return null
+  const unstagedAdds =
+    deletionMode(stagedText) !== null ? addNewNums(combined) : addNewNums(parse(unstagedText))
+  return computeStagedIndices(combined, delOldNums(parse(stagedText)), unstagedAdds)
+}
+
+/**
+ * reconcileRuns fixes the COUNT of staged rows inside every run of identical
+ * adjacent lines, which is the one thing the two diffs can disagree on.
+ *
+ * Between identical neighbours git's choice of "the changed one" is arbitrary,
+ * and the worktree diff and the index diff do not have to make the same one:
+ * with `}` at worktree lines 4–6, the former may add line 4 while the latter
+ * says line 6 is the one not in the index. Read one number against the other
+ * and line 4 is both "added" and "in the index" — staged — while line 6 is a
+ * Ctx row and cannot show anything, so one more `}` paints as staged than the
+ * index holds. That is not content-equivalent: the next toggle would rebuild
+ * the desired set from the painting and put the extra `}` into the index.
+ *
+ * Within the run the lines are interchangeable, so the count IS well-defined:
+ * `hits` of the run's `oldNum`s/`newNum`s are on the other diff's list, and
+ * `target(changedRows, hits)` says how many of the run's changeable rows must
+ * be marked. Whatever git's own alignment already marked is kept where the
+ * count agrees; otherwise rows are dropped from the front or added from the
+ * back, so a consistent pair of diffs is a no-op and a slid one settles on the
+ * later rows. Every choice yields the same blob when `buildPartialPatch`
+ * re-applies it, which is what makes the choice safe to make.
+ */
+function reconcileRuns(
+  combined: Line[],
+  out: Set<number>,
+  changeKind: LineKind,
+  onSide: (l: Line) => boolean,
+  hit: (l: Line) => boolean,
+  target: (changedRows: number, hits: number) => number,
+): void {
+  let runStart = -1
+  let runText = ''
+  let runNoNewline = false
+  let hits = 0
+  let changed: number[] = []
+  const flush = () => {
+    if (runStart < 0 || changed.length === 0) return
+    const want = target(changed.length, hits)
+    let have = changed.filter((i) => out.has(i)).length
+    for (let k = 0; k < changed.length && have > want; k++) {
+      if (out.delete(changed[k])) have--
+    }
+    for (let k = changed.length - 1; k >= 0 && have < want; k--) {
+      if (!out.has(changed[k])) {
+        out.add(changed[k])
+        have++
       }
     }
   }
-  return out
+  for (let i = 0; i < combined.length; i++) {
+    const l = combined[i]
+    if (!onSide(l)) continue
+    const text = l.text.slice(1)
+    if (runStart < 0 || text !== runText || l.noNewline !== runNoNewline) {
+      flush()
+      runStart = i
+      runText = text
+      runNoNewline = l.noNewline
+      hits = 0
+      changed = []
+    }
+    if (hit(l)) hits++
+    if (l.kind === changeKind) changed.push(i)
+  }
+  flush()
 }
 
 /**

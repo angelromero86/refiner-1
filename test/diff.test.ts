@@ -16,6 +16,7 @@ import {
   buildPartialPatch,
   computeStagedIndices,
   creationMode,
+  delOldNums,
   deletionMode,
   filterContentLines,
   LineKind,
@@ -46,6 +47,7 @@ interface GoldenCase {
   lines: GoldenLine[]
   aligned: GoldenRow[]
   patches: Record<string, string>
+  /** Go's content-matched read-back — kept in the fixture, no longer an oracle. */
   stagedRoundTrip: Record<string, number[]>
 }
 
@@ -326,14 +328,25 @@ describe.each(cases.map((c) => [c.name, c] as const))('%s', (_name, c) => {
   })
 
   test('computeStagedIndices round-trips the include set', () => {
+    // The patch IS the cached diff git would report after applying it, so its
+    // Del `oldNum`s are the staged deletions; the index→worktree diff's Add
+    // `newNum`s are the working-tree lines the patch left out. The golden
+    // `stagedRoundTrip` is deliberately NOT the oracle: it records what the
+    // Go content-matching produced, bug included (`real2.diff` strategy `last`
+    // stages row 103 and reads back row 52).
     for (const [name, include] of Object.entries(strats)) {
       const patch = buildPartialPatch(PATCH_PATH, combined, include)
       let recovered: number[] = []
       if (patch !== '') {
-        const stagedLines = filterContentLines(parse(patch))
-        recovered = [...computeStagedIndices(combined, stagedLines)].sort((a, b) => a - b)
+        const unstagedAdds = new Set<number>()
+        combined.forEach((l, i) => {
+          if (l.kind === LineKind.Add && !include.has(i)) unstagedAdds.add(l.newNum)
+        })
+        recovered = [...computeStagedIndices(combined, delOldNums(parse(patch)), unstagedAdds)].sort(
+          (a, b) => a - b,
+        )
       }
-      expect(recovered, `strategy=${name}`).toEqual(c.stagedRoundTrip[name]!)
+      expect(recovered, `strategy=${name}`).toEqual([...include].sort((a, b) => a - b))
     }
   })
 })

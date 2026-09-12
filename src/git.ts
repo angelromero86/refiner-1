@@ -273,6 +273,29 @@ export async function loadStagedDiff(source: Source, file: ChangedFile): Promise
   return ''
 }
 
+/**
+ * loadUnstagedDiff returns the index-vs-working-tree diff for a file — a plain
+ * `git diff`, with no context (`-U0`) because only its `+` lines are read: their
+ * `newNum`s are the working-tree lines the index does NOT have, which is how
+ * `computeStagedIndices` tells a staged Add row from an unstaged one. Empty in
+ * review mode and whenever index and working tree agree.
+ *
+ * Empty is also what git answers for a path with no index entry at all — an
+ * untracked file, or one whose deletion is staged — since it only diffs what
+ * the index knows. Read as "no unstaged lines" that would paint every Add row
+ * as staged, so the caller must settle the entry's existence from the cached
+ * diff (`''`, or a `deleted file mode` header) before trusting this one.
+ *
+ * Unlike `loadStagedDiff` a failure is thrown, not blanked: `''` here means
+ * "everything is in the index", and that is the wrong default for an error.
+ */
+export async function loadUnstagedDiff(source: Source, file: ChangedFile): Promise<string> {
+  if (source.mode !== Mode.Uncommitted) return ''
+  const r = await run(['diff', '--no-color', '-U0', '--', file.path])
+  if (r.exitCode !== 0) throw new Error(`git diff: ${r.stderr.trim()}`)
+  return r.stdout
+}
+
 /** applyPatchToIndex pipes a unified-diff patch into `git apply --cached`. */
 export async function applyPatchToIndex(patch: string): Promise<void> {
   const r = await run(['apply', '--cached', '--whitespace=nowarn'], patch)
