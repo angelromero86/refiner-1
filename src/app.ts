@@ -65,6 +65,7 @@ import {
   type ThemeOverrides,
 } from './theme.ts'
 import { applyTheme } from './styles.ts'
+import { buildLayout, type Layout } from './rows.ts'
 
 export enum Focus {
   Tree,
@@ -214,6 +215,24 @@ export interface ThreadModal {
 
 export interface ThreadListModal {
   cursor: number
+}
+
+/**
+ * The inline compose block: a textarea spliced into the diff pane under a card
+ * (reply, edit) or under the anchor line (new thread). While it is open the
+ * content cursor parks on its first row and every key but `esc` and the save
+ * chords goes to the widget.
+ */
+export interface Compose {
+  kind: 'new' | 'reply' | 'edit'
+  /** The thread replied to or edited; '' for a new one. */
+  threadId: string
+  /** New thread only: what it anchors to. */
+  file: string
+  start: number
+  end: number
+  /** Edit only: the comment whose body is in the widget. */
+  commentId: string
 }
 
 /** The keymap overlay (`k`). Scrollable, because the list outgrows short terminals. */
@@ -428,6 +447,17 @@ export class App {
   relocation: Promise<void> = Promise.resolve()
   modal: ThreadModal | null = null
   threadList: ThreadListModal | null = null
+  compose: Compose | null = null
+  /** Threads whose card shows every comment; the rest are collapsed. */
+  expandedThreads = new Set<string>()
+  /**
+   * Bumped by every in-memory change to what a card shows — a reply, an
+   * edit, a status flip, a relocation, a merge in `save()`, a fenced block's
+   * highlight landing, a card expanded or collapsed. The layout memo keys on
+   * it; `withStableCursor` bumps it for you, and every mutation path that
+   * can move rows under the cursor should go through that.
+   */
+  threadsEpoch = 0
   finder: FinderModal | null = null
   help: HelpModal | null = null
   themePicker: ThemePickerModal | null = null
@@ -1260,6 +1290,61 @@ export class App {
   /** Where `id` stands against the working tree, or null before any pass has seen it. */
   threadDrift(id: string): Drift | null {
     return this.drift.get(id) ?? null
+  }
+
+  // ----------------------------------------------------------- display rows
+  // The diff pane shows the active diff's rows with the thread cards spliced
+  // in (`src/rows.ts`). The cursor, the scroll and the selection index THOSE
+  // rows; staging and hunks index the diff and map through `diffIdxAt`.
+
+  /**
+   * Text columns inside the diff pane: its width minus one column of padding
+   * each side. Mirrors the view's box, so the app can build the same layout the
+   * view draws without being handed a width.
+   */
+  contentWidth(): number {
+    return Math.max(1, this.diffPanelWidth() - 2)
+  }
+
+  /**
+   * The layout the pane is drawing: built at the full content width, or one
+   * column narrower when the rows overflow the pane and the last column goes to
+   * the scrollbar. Both are memoized, so asking is cheap.
+   */
+  activeLayout(): Layout {
+    const w = this.contentWidth()
+    const full = this.layout(w)
+    return full.rows.length > this.paneInnerHeight() ? this.layout(Math.max(1, w - 1)) : full
+  }
+
+  /** The two most recent widths' layouts, with what they were built from. */
+  private layoutMemo = new Map<number, { key: readonly unknown[]; layout: Layout }>()
+
+  /**
+   * layout is `buildLayout` memoized on everything it reads: the file, the
+   * view, the diff and store objects, `threadsEpoch`, the compose block and
+   * the palette (card rows carry resolved colors). Two slots, because the view
+   * asks for `w` and then `w - 1` on every frame that has a scrollbar.
+   */
+  layout(contentW: number): Layout {
+    const key = [
+      this.selectedPath,
+      this.effectiveViewMode(),
+      this.cache.get(this.selectedPath),
+      this.store,
+      this.threadsEpoch,
+      this.compose,
+      this.themeEpoch,
+    ] as const
+    const slot = this.layoutMemo.get(contentW)
+    if (slot && slot.key.every((k, i) => k === key[i])) return slot.layout
+    const layout = buildLayout(this, contentW)
+    this.layoutMemo.delete(contentW)
+    this.layoutMemo.set(contentW, { key, layout })
+    while (this.layoutMemo.size > 2) {
+      this.layoutMemo.delete(this.layoutMemo.keys().next().value!)
+    }
+    return layout
   }
 
   /**

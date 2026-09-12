@@ -566,3 +566,14 @@ function lineIndexOf(lineStart: number[], offset: number): number {
   }
   return lo
 }
+
+/**
+ * highlightSource highlights a standalone snippet — a fenced block inside a
+ * review comment — as a one-document parse, returning runs keyed by 1-based
+ * line. Same pipeline as the diff, minus the hunk bookkeeping: a snippet has
+ * no gaps. Never throws; an unavailable client yields no runs.
+ */
+export async function highlightSource(text: string, filetype: string): Promise<LineRuns> {
+  if (!(await ensureClient())) return new Map()
+  return runsFor({ text, firstLine: 1, gaps: new Set() }, filetype)
+}

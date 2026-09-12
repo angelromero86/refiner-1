@@ -106,3 +106,11 @@ export function wrapLine(s: string, w: number): string[] {
   if (line !== '' || out.length === 0) out.push(prefix + line)
   return out
 }
+
+/** ISO timestamp → "YYYY-MM-DD HH:mm" in local time; the input unchanged when it won't parse. */
+export function formatStamp(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}

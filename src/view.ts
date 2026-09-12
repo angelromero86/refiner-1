@@ -42,7 +42,7 @@ import {
   type RowState,
 } from './render.ts'
 import { chunk, S, statusStyle, withBg, type Style } from './styles.ts'
-import { truncate, width as textWidth, wrapLine } from './text.ts'
+import { formatStamp, truncate, width as textWidth, wrapLine } from './text.ts'
 import { dirState, DirState, type FlatNode } from './tree.ts'
 
 const NL: TextChunk = { __isChunk: true, text: '\n' }
@@ -1463,12 +1463,4 @@ function rightAlignMarker(
     }
   }
   return clampRow(row, w)
-}
-
-/** ISO timestamp → "YYYY-MM-DD HH:mm" in local time. */
-function formatStamp(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return iso
-  const p = (n: number) => String(n).padStart(2, '0')
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
