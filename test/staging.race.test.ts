@@ -23,7 +23,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { App } from '../src/app.ts'
 import { Store } from '../src/comments.ts'
-import { computeStagedIndices, filterContentLines, LineKind, parse, type Line } from '../src/diff.ts'
+import { filterContentLines, LineKind, parse, stagedIndicesFromDiffs, type Line } from '../src/diff.ts'
 import { Mode, type Source } from '../src/git.ts'
 import { toggleFullStage, toggleStaged } from '../src/staging.ts'
 
@@ -74,10 +74,10 @@ async function worktreeDiff(path: string): Promise<Line[]> {
 /** What git actually has staged, as indices into the unified diff. */
 async function stagedIndices(path: string): Promise<number[]> {
   const combined = await worktreeDiff(path)
-  const r = await git(['diff', '--no-color', '-U99999', '--cached', 'HEAD', '--', path])
-  if (r.stdout === '') return []
-  const staged = filterContentLines(parse(r.stdout))
-  return [...computeStagedIndices(combined, staged)].sort((a, b) => a - b)
+  const cached = await git(['diff', '--no-color', '-U99999', '--cached', 'HEAD', '--', path])
+  const unstaged = await git(['diff', '--no-color', '-U0', '--', path])
+  const staged = stagedIndicesFromDiffs(combined, cached.stdout, unstaged.stdout)
+  return staged ? [...staged].sort((a, b) => a - b) : []
 }
 
 function sorted(set: ReadonlySet<number>): number[] {

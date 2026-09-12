@@ -15,12 +15,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   buildPartialPatch,
-  computeStagedIndices,
   creationMode,
   deletionMode,
   filterContentLines,
   LineKind,
   parse,
+  stagedIndicesFromDiffs,
   type Line,
 } from '../src/diff.ts'
 import { applyPatchToIndex, enterRepoRoot, unstageFile } from '../src/git.ts'
@@ -91,12 +91,15 @@ async function tryApplyToIndex(patch: string) {
   return await git(['apply', '--cached', '--whitespace=nowarn'], patch)
 }
 
-/** What is currently staged, as indices into `combined`. */
+/**
+ * What is currently staged, as indices into `combined` — derived the way
+ * `App.loadDiffPair` does it, from the cached diff and the index→worktree one.
+ */
 async function stagedIndices(path: string, combined: Line[]): Promise<number[]> {
-  const r = await git(['diff', '--no-color', '-U99999', '--cached', 'HEAD', '--', path])
-  if (r.stdout === '') return []
-  const staged = filterContentLines(parse(r.stdout))
-  return [...computeStagedIndices(combined, staged)].sort((a, b) => a - b)
+  const cached = await git(['diff', '--no-color', '-U99999', '--cached', 'HEAD', '--', path])
+  const unstaged = await git(['diff', '--no-color', '-U0', '--', path])
+  const staged = stagedIndicesFromDiffs(combined, cached.stdout, unstaged.stdout)
+  return staged ? [...staged].sort((a, b) => a - b) : []
 }
 
 async function applyToIndex(patch: string) {
@@ -602,7 +605,7 @@ test('a deleted file with no trailing newline keeps its marker', async () => {
   expect(stripped.exitCode).not.toBe(0)
 })
 
-test('a staged deletion round-trips through computeStagedIndices', async () => {
+test('a staged deletion round-trips through stagedIndicesFromDiffs', async () => {
   // What the TUI paints as "staged" after the press. Nothing here knows the
   // header changed shape, so this is the guard that it still agrees.
   await commitBase('gone.txt', 'a\nb\nc\n')
