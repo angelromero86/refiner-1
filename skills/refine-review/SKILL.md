@@ -79,9 +79,11 @@ Severity prefix in `body` (use exactly one, in brackets, at the start):
 
 ## Formatting the `body`
 
-VSCode renders `body` as **Markdown**. The TUI wraps it as **plain text** — it honors
-your line breaks but shows the markup literally. So write prose that reads well
-either way: real paragraphs, short lines, no heavy markup scaffolding.
+Both clients render `body` as **Markdown**: VSCode natively, the TUI with its own
+renderer — bold, inline code, fenced code blocks with syntax highlighting (tag the
+language), bullet and numbered lists, blockquotes, headings and rules. The TUI shows
+the thread as a card in the diff, collapsed to the first line of the comment until
+the reviewer expands it, so the first sentence has to carry the finding on its own.
 
 **`body` is a JSON string, so line breaks are `\n`.** A blank line between paragraphs
 is `\n\n`. Getting this wrong is the most common mistake: it collapses your whole

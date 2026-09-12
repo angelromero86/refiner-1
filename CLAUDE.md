@@ -147,8 +147,8 @@ saves once. Two things about the bookkeeping. The writes go through
 and survive the merge in `save()`; on replay they are last-writer-wins and never
 a conflict, because two clients relocating the same thread from the same file
 agree, and when they saw different files the later one saw the newer. And
-`App.drift` — `{ status, from }` per thread id, what `isThreadOutdated` and a
-"moved from L42" label read — is memory only: on disk the corrected range simply
+`App.drift` — `{ status, from }` per thread id, what a card's `moved from L42` /
+`lost — was L42-45` label and the list's `[moved]`/`[lost]` read — is memory only: on disk the corrected range simply
 IS the range, the extension keeps no history either, and `from` is sticky for
 one store instance so that a later pass finding the thread exactly where the
 previous one put it does not erase the notice. `test/anchor.test.ts` pins the
@@ -183,14 +183,74 @@ a reply to a thread the other client deleted, an edit to a comment they also
 edited — are counted in the `SaveReport` and reach the banner; silence there would
 be this bug again in miniature.
 
-Two consequences elsewhere. **The modal is re-anchored by id after a merge**
-(`ThreadModal.threadId`): its `threadIdx` indexes an array the merge has just
-rebuilt, and `d`/`D` read the thread straight out of it, so a stale index deletes
-somebody else's thread. And **the file is replaced by rename, not truncated** —
+Two consequences elsewhere. **The UI is re-anchored by id after a merge**: the
+cursor by the card it was on (`withStableCursor`, see "Inline threads"), the
+compose block by `Compose.threadId` — a thread deleted meanwhile closes it with a
+notice. Nothing holds an index into `store.threads` across an await; the modal
+that did deleted somebody else's thread with `D`. And **the file is replaced by
+rename, not truncated** —
 `Bun.write()` over an existing path truncates in place, which serves concurrent
 readers a half-written file, i.e. manufactures the unreadable-store case above for
 the process next door. The watcher watches the `.refiner/` directory, not the file,
 partly for that reason; it ignores the `comments.json.<pid>.<n>.tmp` we rename from.
+
+## Inline threads
+
+There is no thread modal. A thread is a **card** spliced into the diff pane's row
+stream right under the last line of its range (`src/rows.ts` places it, `src/card.ts`
+draws it), collapsed to a header plus one preview line until `enter` expands it; a
+resolved one is a single muted row. Replying, editing and opening a thread happen in
+a textarea spliced under the card (`App.compose`). Four things hold it together.
+
+**The cursor lives in display space.** `contentCursor`, `contentScroll` and
+`selectionAnchor` index `Layout.rows` — diff rows, card rows and compose rows — and
+the pane draws by walking them, so the cursor passes through a card line by line.
+Everything that means a LINE maps back through `App.diffIdxAt(displayIdx)` (-1 on a
+non-diff row) and skips what is not one: `toggleStaged` iterates the display
+selection and stages exactly the diff rows under it, `openOrCreateThread` collects
+its line range the same way, hunks are found in diff space and landed through
+`displayIdxOfDiff`. The old `activeRowCount()` is the diff array's length and only
+the minimap's marks still want it; a cursor wants `displayRowCount()`. The
+invariants from "Index spaces are not interchangeable" are unchanged underneath —
+display → active diff → unified is two hops, and neither may be skipped.
+
+**The layout is memoized, and `threadsEpoch` is its clock.** `App.layout(w)` keys on
+`(selectedPath, effectiveViewMode, the RenderedDiff object, the Store object,
+threadsEpoch, compose, themeEpoch)` and keeps two widths, because an expanded card
+is as tall as its markdown at the width it gets and `buildContent` decides the
+scrollbar column from the row count — it asks for `w`, and draws with `w - 1` when
+that overflows (`activeLayout()` is that rule). The card rows are rendered INTO the
+layout, so a cursor move never re-renders a comment; the cursor tint is painted over
+the cached row per frame. Every in-memory change to what a card shows must bump
+`threadsEpoch`: a reply, an edit, `x`, a relocation, a merge in `save()`, a fenced
+block's highlight landing (`src/codeblocks.ts`), a card expanded or collapsed. The
+way to not forget is `App.withStableCursor(fn)`: it captures what the cursor is on
+(`cursorIdentity`: the card id and line, else the diff row), runs `fn`, bumps the
+epoch and puts the cursor back on the same THING — which is also why a reply or a
+relocation does not leave the cursor on a different row. `refresh()` does the same
+across its store swap by hand, because its layout is empty in between.
+
+**The card handler routes before the global keys.** `r`, `e` and `g` are refresh,
+editor and lazygit everywhere else; on a card the thread is what you mean, so
+`handleCardKey` runs first and returns false for whatever it does not claim (arrows,
+paging, `h`/`H`, `tab`), which then reach the pane as usual. The compose handler
+routes even earlier and claims only `esc` and the save chords — and the routing
+STOPS there whether or not it claimed the key, because a `q` typed into a comment is
+a letter and must never reach `handleGlobalKey`.
+
+**Compose blocks the watcher; browsing does not.** `overlayOpen()` in `src/watch.ts`
+includes `app.compose` because `refresh()` rebuilds the store under the textarea.
+It deliberately does not include "the cursor is on a card" or "a card is expanded":
+a reload re-anchors the cursor by identity, so a thread arriving from an agent while
+you read its neighbour simply appears. The modal used to block every reload while
+open, which made an agent's reply invisible exactly while the reviewer was looking
+at the thread.
+
+`src/codeblocks.ts` is the bridge between the synchronous markdown renderer and the
+asynchronous highlighter: `highlightBlock` answers from a cache or starts the parse
+and answers null, and the view's listener bumps `threadsEpoch` when it lands. It
+parses nothing until `installCodeblockHighlighter` has been called, so a test or a
+headless layout gets plain blocks and spawns no parser worker.
 
 ## OpenTUI specifics that bit us
 
@@ -335,7 +395,8 @@ reads — an earlier pass had the header counting threads while labelling them
 Rules: `store.threads` is the list of threads (the field is `app.store`, never
 `app.threads`, so `store.threads` reads correctly). `lineHasThread` asks about
 anchors; the `thread`/`thread_label` theme colors paint the "a thread is anchored
-here" cue. The word "message" is not used anywhere.
+here" cue, `thread_marker` the card's bar. A **card** is a thread drawn in the pane.
+The word "message" is not used anywhere.
 
 ## Keymap
 
@@ -353,7 +414,9 @@ surfaces it, so an unlisted key is an undiscoverable key.
 `q` and `esc` open a quit confirmation rather than exiting outright; `⌃c` still
 exits immediately from anywhere, which is the deliberate escape hatch. Nothing is
 lost on quit — threads are written on every edit, staging lives in git — so the
-confirmation guards against the fat-finger, not against data loss.
+confirmation guards against the fat-finger, not against data loss. `D` on a card
+reuses the same box (`App.confirm`) and there it IS the guard, which is why there is
+no `d`: a destructive key one row away from the scroll keys does not go unconfirmed.
 
 ## External processes
 
@@ -448,7 +511,7 @@ lookup is a linear scan over every file in the repo, once per descendant, on
 every frame. `test/tree.test.ts` pins the three states.
 
 **Every jump that moves the diff pane goes through `revealPath`.** The mode
-toggle, the finder (`⌃p`) and `jumpToThread` all point the right pane at a file
+toggle, the finder (`⌃p`) and `jumpToThread` (`n`/`N`, the list) all point the right pane at a file
 without the tree cursor having walked there, and each one used to park the
 cursor only *if the row happened to be visible* — which in ALL mode it usually
 is not, because entering ALL folds the repo down to its folders. So the tree
@@ -463,7 +526,7 @@ a case to fix here: `toggleFileMode` clears the selection first, and
 `revealPath('')` is a no-op.
 
 **The scrollbar column only exists when it can scroll.** `buildContent` reserves
-the last column for it when `activeRowCount() > h` and hands it to the code
-otherwise — a diff that fits shows its change bands as the diff itself, so the
+the last column for it when the display rows (cards included) outnumber `h` and
+hands it to the code otherwise — a diff that fits shows its change bands as the diff itself, so the
 minimap was drawing a second copy of what was already on screen and charging a
 column for it.

@@ -59,9 +59,14 @@ Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
   colores de token encima, así que se lee como código y no como un bloque teñido.
 - **Staging line-level** — `space` stagea/unstagea la línea o la selección bajo el
   cursor; parte el patch y se lo pasa a `git apply --cached`.
-- **Threads de revisión** — anclados a `(fichero, rango de líneas)`, persistidos en
-  `.refiner/comments.json`. Editables a mano, por la extensión de VSCode o por un
-  agente.
+- **Threads de revisión inline** — anclados a `(fichero, rango de líneas)`,
+  persistidos en `.refiner/comments.json`. Cada thread es una **tarjeta** dentro del
+  diff, justo debajo de la última línea de su rango; el cursor la recorre fila a fila
+  como cualquier otra. Plegada enseña cabecera + una línea de preview, `enter` la
+  despliega con el markdown renderizado (negrita, código, bloques con syntax
+  highlighting, listas, citas). Responder, editar o abrir un thread es un textarea
+  que aparece bajo la tarjeta, sin modal. Editables a mano, por la extensión de
+  VSCode o por un agente.
 - **CHANGES / ALL** — `tab` en el árbol cambia entre "solo lo que ha cambiado" y
   "todo el repo", para poder comentar ficheros que nadie ha tocado.
 - **Navegación por hunks** — `h` / `H` saltan al siguiente / anterior bloque de
@@ -216,13 +221,13 @@ orden. La fuente de verdad es [`src/keymap.ts`](src/keymap.ts).
 
 | Tecla | Acción |
 |-------|--------|
-| `↑ ↓` | Scroll |
+| `↑ ↓` | Scroll — también por las filas de las tarjetas |
 | `⇧↑ ⇧↓` | Extender una selección multilínea |
 | `⌃u ⌃d` | Media página arriba / abajo (también `pgup` / `pgdn`) |
 | `home` / `end` | Ir a la primera / última fila (`G` también va al final) |
 | `h` / `H` | Saltar al siguiente / anterior hunk — el siguiente bloque de líneas cambiadas, dando la vuelta al llegar al final |
-| `space` | Stage / unstage de la línea, o de toda la selección |
-| `enter` | Abrir el thread de esta línea, o empezar uno nuevo |
+| `space` | Stage / unstage de la línea, o de toda la selección (las tarjetas se saltan) |
+| `enter` | Ir a la tarjeta del thread de esta línea, o empezar uno nuevo sobre la selección |
 | `tab` | Ciclar la vista: DIFF → SPLIT → NORMAL |
 | `e` | Abrir el fichero en tu editor, en la línea del cursor |
 
@@ -230,15 +235,20 @@ orden. La fuente de verdad es [`src/keymap.ts`](src/keymap.ts).
 
 | Tecla | Acción |
 |-------|--------|
-| `c` | Listar todos los threads del repo (un thread contiene uno o más comentarios) |
-| `↑ ↓` | Moverse entre los comentarios de un thread |
-| `⌃u ⌃d` | Scroll de un comentario largo sin cambiar la selección |
-| `g` | Ir al código al que está anclado el thread |
-| `r` | Responder — añade un comentario a este thread |
-| `e` | Editar el comentario seleccionado |
-| `d` / `D` | Borrar el comentario seleccionado / el thread entero |
+| `enter` | Sobre una tarjeta: desplegarla o plegarla — plegada enseña la cabecera y una línea de preview |
+| `r` | Sobre una tarjeta: responder — el textarea se abre justo debajo |
+| `e` | Sobre una tarjeta: editar tu último comentario del thread |
+| `x` | Sobre una tarjeta: resolver el thread, o reabrirlo — resuelto se pliega a una sola fila apagada |
+| `D` | Sobre una tarjeta: borrar el thread entero (pide confirmación) |
+| `z` | Desplegar todas las tarjetas del fichero, o plegarlas todas |
+| `n` / `N` | Siguiente / anterior thread, cruzando ficheros en el orden del árbol |
+| `c` | Listar todos los threads del repo — `enter` salta a la tarjeta (un thread contiene uno o más comentarios) |
 | `alt+enter` | Guardar lo que has escrito (`alt+s` y `⌃s` también valen) |
-| `esc` | Cancelar la escritura, o cerrar el thread |
+| `esc` | Cancelar la escritura |
+
+Las teclas de tarjeta (`enter`, `r`, `e`, `x`, `D`) se resuelven **antes** que las
+globales cuando el cursor está sobre una: ahí `r` es responder y no refrescar, `e` es
+editar y no abrir el editor. Fuera de una tarjeta vuelven a ser las de siempre.
 
 **Sesión**
 
@@ -255,12 +265,13 @@ Dentro de cada overlay, además:
 
 - **Picker de ficheros** (`p`): `↑↓` o `⌃p` / `⌃n` para moverte, `enter` abre, `esc`
   cierra. Todo lo demás va al campo de texto.
-- **Lista de threads** (`c`): `↑↓`, `enter` abre el thread seleccionado, `esc` o `c`
-  cierran.
+- **Lista de threads** (`c`): `↑↓`, `enter` salta a la tarjeta del thread, `esc` o
+  `c` cierran.
 - **Ayuda** (`k`): `↑↓`, `⌃u` / `⌃d`, `home`; `esc`, `k`, `?` o `q` cierran.
 - **Temas** (`t`): `↑↓` previsualiza, `enter` guarda la elección, `esc`, `t` o `q`
   restauran el tema anterior.
-- **Confirmación de salida**: `y` o `enter` salen, `n`, `esc` o `q` vuelven.
+- **Confirmaciones** (salir, borrar un thread): `y` o `enter` confirman, `n`, `esc`
+  o `q` vuelven.
 
 Los overlays son modales: se tragan cualquier otra tecla en vez de dejarla actuar
 sobre lo que hay detrás.
@@ -322,12 +333,12 @@ pantalla entera y no hay nada que dimensionar.
 | `add_bg` | `#32361a` | Fondo de las líneas añadidas |
 | `del_bg` | `#402120` | Fondo de las líneas borradas |
 | `add_fg` | `#b8bb26` | Signo `+`, badge `A` |
-| `del_fg` | `#fb4934` | Signo `-`, badge `D`, banner de error, label `OUTDATED` |
+| `del_fg` | `#fb4934` | Signo `-`, badge `D`, banner de error, el `lost — was L…` de una tarjeta |
 | `staged_bg` | `#23303d` | Fondo de las líneas que ya están en el índice |
 | `staged_fg` | `#83a598` | Primer plano de esas líneas, y su banda en el minimapa |
 | `thread` | `#4c2b3d` | **Fondo** del gutter en las líneas comentadas, y la banda del minimapa. Tiene que dejar leer texto encima |
 | `thread_label` | `#fbf1c7` | Los números de línea dibujados sobre ese fondo |
-| `thread_marker` | `#d3869b` | El `●` junto a los ficheros con threads en el árbol. Es un **primer plano**: por eso es una clave distinta de `thread`, que es un fondo oscuro |
+| `thread_marker` | `#d3869b` | El `●` junto a los ficheros con threads en el árbol y la barra `┃` de las tarjetas. Es un **primer plano**: por eso es una clave distinta de `thread`, que es un fondo oscuro |
 | `tree_guide` | `#665c54` | Las líneas `├ └ │` que dibujan la estructura del árbol |
 | `cursor_bg` | `#3c3836` | Fila bajo el cursor |
 | `background` | `#282828` | Lienzo de los paneles y fondo de los modales. Los overlays tienen que ser opacos o el diff se transparenta a través de su texto |
@@ -430,10 +441,11 @@ mano: se respeta tu `.gitignore` tal cual. La lista se calcula al arrancar, así
 directorio que pase a estar ignorado más tarde no se filtra hasta el siguiente
 lanzamiento.
 
-Mientras tengas un modal abierto no se refresca por debajo — sería hostil recargar a
-media redacción de un comentario, y los índices que sostiene el modal podrían moverse.
-Se guarda el evento y se aplica en cuanto cierras. Para desactivarlo del todo:
-`watch = false` en el config.
+Mientras estés escribiendo un comentario no se refresca por debajo — sería hostil
+recargar a media redacción, y el store se reconstruiría bajo el textarea. Se guarda el
+evento y se aplica en cuanto guardas o cancelas. Leer sí: con el cursor sobre una
+tarjeta, la respuesta de un agente aparece en ella y el cursor se queda donde estaba.
+Para desactivarlo del todo: `watch = false` en el config.
 
 ### Vocabulario
 
@@ -441,14 +453,19 @@ Dos conceptos, y la UI usa siempre estas palabras para no confundirlos:
 
 - **Thread** — está anclado a `(fichero, rango de líneas)`, tiene `status` y
   contiene **uno o más comentarios**. Es lo que cuenta el header, lo que lista `c`,
-  lo que marca el `●` del árbol y la banda del minimapa, y lo que borras con `D`.
+  lo que marca el `●` del árbol y la banda del minimapa, la tarjeta que ves en el
+  diff, y lo que borras con `D` o resuelves con `x`.
 - **Comentario** — un mensaje dentro de un thread: autor, rol y cuerpo. Es lo que
-  añade `r` (responder), lo que edita `e` y lo que borra `d`.
+  añade `r` (responder) y lo que edita `e`.
 
-En la lista de `c`, `+2` detrás del autor significa que ese thread tiene dos
-comentarios más además del primero, y el snippet es la primera línea del primer
-comentario. Un thread marcado `[outdated]` en la lista (`· OUTDATED` en su cabecera)
-es uno cuyo fichero ya no existe, o cuyo rango cae más allá del final del fichero.
+La cabecera de la tarjeta nombra a quien **abrió** el thread y su severidad; la línea
+de preview cita el **último** comentario, que es lo nuevo. En la lista de `c`, `+2`
+detrás del autor significa que ese thread tiene dos comentarios más además del
+primero. Un thread `[moved]` (`· moved from L38` en su cabecera) es uno cuyo código se
+encontró en otra línea y se reancló solo; uno `[lost]` (`· lost — was L38-40`) es uno
+cuyo fichero ya no existe o cuyo texto no se encuentra. Ninguno desaparece del panel:
+una tarjeta sin línea exacta se coloca bajo la línea anterior más cercana y dice su
+rango (`· L38-40`).
 
 ### Esquema de `.refiner/comments.json`
 
@@ -486,7 +503,7 @@ Reglas del formato:
   contexto a cada lado) con el que refiner y la extensión reanclan los threads
   cuando el código se mueve: los dos lo capturan al crear un thread, lo rellenan si
   falta y corrigen `range` cuando encuentran el texto en otra línea. Un thread cuyo
-  texto ya no aparece se marca `outdated` en el TUI y conserva su `range`. Los
+  texto ya no aparece se marca `lost` en el TUI y conserva su `range`. Los
   agentes **no** lo escriben. Cualquier campo que no reconozcas se conserva.
 - **Serialización**: `JSON.stringify(data, null, 2)` más un `\n` final. Es
   literalmente lo que escriben refiner y la extensión, así que no se pelean por el
@@ -511,8 +528,9 @@ responde o aplica un cambio, deja `status = "open"` y añade un comentario nuevo
 describiendo qué hizo. **Cerrar es decisión humana** — el humano valida el cambio y
 borra el thread con `D` en refiner, o pulsa ✓ en VSCode.
 
-(refiner por su parte tampoco escribe nunca `status: "resolved"`: lo lee y lo enseña
-en la cabecera del thread, pero su única forma de cerrar es borrar.)
+(En refiner, `x` sobre la tarjeta es lo que escribe `status: "resolved"` — y lo que
+lo deshace. Una tarjeta resuelta se pliega a una fila apagada `┃ ✓ …`; `enter` sigue
+desplegándola.)
 
 ### Skills
 
