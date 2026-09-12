@@ -534,3 +534,124 @@ test('a thread with a malformed range is normalized, not dropped', async () => {
   expect(s.threads[0].range).toEqual({ start: 1, end: 1 })
   expect(s.threads[0].status).toBe('open')
 })
+
+// ------------------------------------------------------------- relocation
+// `setRange` and `setAnchor` are what drift tracking writes (`src/relocate.ts`).
+// They ride the same id-keyed log as every other mutation, so a corrected range
+// survives a merge onto a file another client rewrote meanwhile — and, unlike a
+// reply or an edit, they never count as a conflict: both clients derive them
+// from the same file with the same algorithm.
+
+const NEW_ANCHOR = { lines: ['  const y = a(x)'], before: ['{'], after: ['}'] }
+
+test('setRange moves the thread in place and persists', async () => {
+  await seed()
+  const s = await Store.load(storePath)
+  const range = s.threads[0].range
+  s.setRange('t-ms9j4trq-1', 90, 92)
+  // Same object: whatever else lives inside `range` is kept.
+  expect(s.threads[0].range).toBe(range)
+  expect(s.threadAt('src/app/commands.ts', 91)?.id).toBe('t-ms9j4trq-1')
+  expect(s.threadAt('src/app/commands.ts', 85)).toBeNull()
+  expect(s.hasPendingWrites()).toBe(true)
+
+  await s.save()
+  const t = (await readFile()).threads[0]
+  expect(t.range).toEqual({ start: 90, end: 92 })
+  expect(t.anchor).toEqual(EXISTING.threads[0].anchor)
+  expect(t.futureField).toEqual({ nested: true })
+})
+
+test('setAnchor backfills the snapshot and persists', async () => {
+  await seed({ ...EXISTING, threads: [{ ...EXISTING.threads[0], anchor: undefined }] })
+  const s = await Store.load(storePath)
+  expect(s.threads[0].anchor).toBeUndefined()
+  s.setAnchor('t-ms9j4trq-1', NEW_ANCHOR)
+  await s.save()
+  expect((await readFile()).threads[0].anchor).toEqual(NEW_ANCHOR)
+})
+
+test('setRange and setAnchor throw on an unknown thread', async () => {
+  const s = await Store.load(storePath)
+  expect(() => s.setRange('nope', 1, 1)).toThrow(/not found/)
+  expect(() => s.setAnchor('nope', NEW_ANCHOR)).toThrow(/not found/)
+})
+
+test('a corrected range survives a merge, and does not touch what the other client wrote', async () => {
+  await seed()
+  const s = await Store.load(storePath)
+  s.setRange('t-ms9j4trq-1', 90, 92)
+  s.setAnchor('t-ms9j4trq-1', NEW_ANCHOR)
+
+  // An agent replies and adds a thread while we were relocating.
+  await externalWrite((d) => {
+    d.threads[0].comments.push({
+      id: 'c-agent-1',
+      author: 'Claude',
+      role: 'assistant',
+      body: 'from the agent',
+      createdAt: '2026-08-01T11:00:00.000Z',
+    })
+    d.threads[0].futureField = { nested: 'theirs' }
+    d.threads.push(agentThread('t-agent-1'))
+  })
+
+  const report = await s.save()
+  expect(report).toEqual({ merged: true, dropped: 0, overwritten: 0 })
+  const after = await readFile()
+  expect(after.threads.map((t: any) => t.id)).toEqual(['t-ms9j4trq-1', 't-agent-1'])
+  expect(after.threads[0].range).toEqual({ start: 90, end: 92 })
+  expect(after.threads[0].anchor).toEqual(NEW_ANCHOR)
+  expect(after.threads[0].comments.map((c: any) => c.id)).toEqual(['m-ms9j4trq-2', 'c-agent-1'])
+  expect(after.threads[0].futureField).toEqual({ nested: 'theirs' })
+  expect(after.threads[1].range).toEqual({ start: 1, end: 2 })
+  // And in memory.
+  expect(s.threads[0].range).toEqual({ start: 90, end: 92 })
+})
+
+test('a range written by both clients is last-writer-wins, never a conflict', async () => {
+  await seed()
+  const s = await Store.load(storePath)
+  s.setRange('t-ms9j4trq-1', 90, 92)
+  // The extension relocated the same thread from a newer file.
+  await externalWrite((d) => {
+    d.threads[0].range = { start: 95, end: 97 }
+    d.threads[0].anchor = { lines: ['theirs'], before: [], after: [] }
+  })
+  const report = await s.save()
+  expect(report).toEqual({ merged: true, dropped: 0, overwritten: 0 })
+  const t = (await readFile()).threads[0]
+  expect(t.range).toEqual({ start: 90, end: 92 })
+  // We only wrote the range; their anchor is kept.
+  expect(t.anchor).toEqual({ lines: ['theirs'], before: [], after: [] })
+})
+
+test('relocating a thread the other client deleted is a no-op, not a dropped edit', async () => {
+  await seed()
+  const s = await Store.load(storePath)
+  s.setRange('t-ms9j4trq-1', 90, 92)
+  s.setAnchor('t-ms9j4trq-1', NEW_ANCHOR)
+  await externalWrite((d) => {
+    d.threads = [agentThread('t-agent-1')]
+  })
+  const report = await s.save()
+  expect(report).toEqual({ merged: true, dropped: 0, overwritten: 0 })
+  expect((await readFile()).threads.map((t: any) => t.id)).toEqual(['t-agent-1'])
+})
+
+test('addThread stores the anchor it was given, through a plain save and a merge', async () => {
+  await seed()
+  const s = await Store.load(storePath)
+  const t = s.addThread('src/a.ts', 10, 11, { author: 'angel', body: 'mio' }, NEW_ANCHOR)
+  expect(t.anchor).toEqual(NEW_ANCHOR)
+  await externalWrite((d) => d.threads.push(agentThread('t-agent-1')))
+  await s.save()
+  const after = await readFile()
+  const mine = after.threads.find((x: any) => x.id === t.id)
+  expect(mine.anchor).toEqual(NEW_ANCHOR)
+  expect(mine.range).toEqual({ start: 10, end: 11 })
+  // Without one, the key is absent rather than null — the extension backfills
+  // on `!st.anchor`, and so does refiner.
+  const bare = s.addThread('src/b.ts', 1, 1, { author: 'angel', body: 'bare' })
+  expect('anchor' in bare).toBe(false)
+})

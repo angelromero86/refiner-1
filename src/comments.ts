@@ -7,12 +7,14 @@
  *
  *   1. The on-disk shape (`version` + `threads[]`, `range: {start, end}`,
  *      `comments[]`, optional `anchor`) is not ours to change unilaterally.
- *   2. Fields we don't understand must survive a round-trip. The extension
- *      maintains `anchor` for drift tracking; if refiner dropped it on every
- *      save, opening the TUI would silently degrade the editor's ability to
- *      keep threads attached to their code. So we mutate the parsed objects in
- *      place and never rebuild them field by field — the root object included,
- *      or a key the extension invents tomorrow dies at the first save.
+ *   2. Fields we don't understand must survive a round-trip. `anchor` is the
+ *      one we do understand now — both clients maintain it for drift tracking
+ *      (`src/relocate.ts`) — but the rule was learnt on it: when only the
+ *      extension wrote it, dropping it on every save would have silently
+ *      degraded the editor's ability to keep threads attached to their code.
+ *      So we mutate the parsed objects in place and never rebuild them field
+ *      by field — the root object included, or a key the extension invents
+ *      tomorrow dies at the first save.
  *   3. A store that never managed to READ its file never writes it. Writing on
  *      top of bytes we could not parse would destroy somebody else's threads — a
  *      half-written file from the extension, an agent killed mid-write, a merge
@@ -66,8 +68,11 @@ export interface StoredComment {
 }
 
 /**
- * A content snapshot the extension uses to keep a thread attached as lines
- * shift. refiner never authors it, but always preserves it.
+ * A content snapshot that keeps a thread attached to its code as lines shift:
+ * the anchored lines plus up to three of context on each side. Maintained by
+ * both clients — captured when a thread is created and backfilled on load when
+ * missing — and relocated by `src/anchor.ts`, which is a port of the extension's
+ * algorithm so the two agree. Agents never write it.
  */
 export interface Anchor {
   lines: string[]
@@ -116,6 +121,8 @@ type Op =
   | { kind: 'deleteThread'; threadId: string }
   | { kind: 'deleteComment'; threadId: string; commentId: string }
   | { kind: 'setBody'; threadId: string; commentId: string; body: string; prevBody: string }
+  | { kind: 'setRange'; threadId: string; range: { start: number; end: number } }
+  | { kind: 'setAnchor'; threadId: string; anchor: Anchor }
 
 /**
  * normalize makes parsed JSON safe to render from by MUTATING it, never by
@@ -512,6 +519,25 @@ export class Store {
           c.body = op.body
           break
         }
+        // Relocation writes. Both clients derive these from the same file
+        // content with the same algorithm, so two writers disagree only when
+        // they saw different versions of the file — and the later one saw the
+        // newer file. Last writer wins, silently: a thread that the other
+        // client deleted meanwhile is not a conflict either, there is simply
+        // nothing left to move.
+        case 'setRange': {
+          const t = base.threads.find((x) => x.id === op.threadId)
+          if (!t) break
+          t.range.start = op.range.start
+          t.range.end = op.range.end
+          break
+        }
+        case 'setAnchor': {
+          const t = base.threads.find((x) => x.id === op.threadId)
+          if (!t) break
+          t.anchor = op.anchor
+          break
+        }
       }
     }
   }
@@ -563,8 +589,18 @@ export class Store {
     return (this.byFile.get(path) ?? []).length > 0
   }
 
-  /** addThread appends a thread (no save) and returns it. */
-  addThread(file: string, start: number, end: number, first: NewComment): StoredThread {
+  /**
+   * addThread appends a thread (no save) and returns it. `anchor` is the
+   * content snapshot for drift tracking, captured by the caller from the file
+   * as it is right now; without one, the next relocation pass backfills it.
+   */
+  addThread(
+    file: string,
+    start: number,
+    end: number,
+    first: NewComment,
+    anchor?: Anchor,
+  ): StoredThread {
     const t: StoredThread = {
       id: this.newId('t'),
       file,
@@ -572,6 +608,7 @@ export class Store {
       status: StatusOpen,
       comments: [this.makeComment(first)],
     }
+    if (anchor) t.anchor = anchor
     this.data.threads.push(t)
     this.pending.push({ kind: 'addThread', thread: t })
     this.rebuildIndex()
@@ -615,6 +652,27 @@ export class Store {
     const c = t.comments[idx]
     this.pending.push({ kind: 'setBody', threadId, commentId: c.id, body, prevBody: c.body })
     c.body = body
+  }
+
+  /**
+   * setRange moves a thread to where relocation found its code. In place, so
+   * the `range` object keeps whatever else another client put in it; and no
+   * index rebuild, because `byFile` keys on the file, not the line.
+   */
+  setRange(threadId: string, start: number, end: number): void {
+    const t = this.data.threads.find((x) => x.id === threadId)
+    if (!t) throw new Error(`thread ${threadId} not found`)
+    t.range.start = start
+    t.range.end = end
+    this.pending.push({ kind: 'setRange', threadId, range: { start, end } })
+  }
+
+  /** setAnchor records (or replaces) a thread's content snapshot. */
+  setAnchor(threadId: string, anchor: Anchor): void {
+    const t = this.data.threads.find((x) => x.id === threadId)
+    if (!t) throw new Error(`thread ${threadId} not found`)
+    t.anchor = anchor
+    this.pending.push({ kind: 'setAnchor', threadId, anchor })
   }
 
   private makeComment(c: NewComment): StoredComment {

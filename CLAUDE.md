@@ -95,12 +95,42 @@ Nothing is lost in the panel, because `loadDiff` restricts the diff to one path 
 git therefore never emits rename headers anyway. `test/renames.test.ts` pins it.
 
 **`.refiner/comments.json` is shared** with the Refiner VSCode extension and with
-agents. Preserve fields you don't understand — `anchor`, which the extension
-maintains for drift tracking, unknown keys inside a thread, and unknown keys at the
-ROOT — and keep the serialization at `JSON.stringify(data, null, 2) + '\n'` so the
-two tools don't fight over whitespace. That is why parsed objects are mutated in
-place and never rebuilt field by field, the root object included.
-`test/comments.test.ts` guards all of it.
+agents. Preserve fields you don't understand — unknown keys inside a thread, and
+unknown keys at the ROOT — and keep the serialization at
+`JSON.stringify(data, null, 2) + '\n'` so the two tools don't fight over
+whitespace. That is why parsed objects are mutated in place and never rebuilt
+field by field, the root object included. `test/comments.test.ts` guards all of it.
+
+**Threads follow the code, and both clients do the following.** A thread's
+`range` is a pair of working-tree line numbers that nothing keeps true, so next
+to it lives `anchor` — the anchored lines plus three of context each side — and
+`src/anchor.ts` finds where that text went. It is a port of the extension's
+`src/anchor.ts` (same `CTX`, same trailing-whitespace-insensitive compare, same
+context×1000−distance ranking), because an anchor either client writes must mean
+the same thing to the other; what refiner adds on top — a fuzzy fallback that
+accepts a window with 60% of the lines, and a guard that refuses to move a lone
+`}` far away unless a real context line agrees — only changes where a thread that
+the extension would have LOST lands, never where an exact match does. The
+division of labour: **agents never write `anchor`** (the skills say so; the skill
+has no working-tree view to capture it from, and an anchor captured from the
+wrong text is worse than none), **the TUI and the extension both capture it** —
+at creation (`Store.addThread`'s last argument) and as a backfill on the first
+pass that sees a thread without one — and both **write a corrected `range` on
+`moved`**, never on `lost`, which leaves the range where it was so a later pass
+can still find the text if it comes back. `src/relocate.ts` runs that pass on
+every `loadFiles()` (startup, every refresh) and after every `loadDiffFor()`,
+reads every file first and writes only under the load-generation guard, then
+saves once. Two things about the bookkeeping. The writes go through
+`Store.setRange`/`setAnchor`, so they enter the same id-keyed op log as a reply
+and survive the merge in `save()`; on replay they are last-writer-wins and never
+a conflict, because two clients relocating the same thread from the same file
+agree, and when they saw different files the later one saw the newer. And
+`App.drift` — `{ status, from }` per thread id, what `isThreadOutdated` and a
+"moved from L42" label read — is memory only: on disk the corrected range simply
+IS the range, the extension keeps no history either, and `from` is sticky for
+one store instance so that a later pass finding the thread exactly where the
+previous one put it does not erase the notice. `test/anchor.test.ts` pins the
+algorithm, `test/relocate.test.ts` the pass and its guards.
 
 Because every save rewrites the whole file, **a `Store` that never managed to read
 its file never writes it**. `Store.load()` throws on malformed JSON, and that only
