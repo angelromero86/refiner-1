@@ -20,7 +20,7 @@ import { lstat, mkdir, readlink, symlink, unlink } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 
-const SKILLS = ['refine-review', 'refine-resolve'] as const
+const SKILLS = ['refine-review', 'refine-resolve', 'refine-web'] as const
 
 const repoRoot = resolve(import.meta.dir, '..')
 const sourceDir = join(repoRoot, 'skills')

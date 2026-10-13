@@ -613,6 +613,10 @@ export class Store {
    * addThread appends a thread (no save) and returns it. `anchor` is the
    * content snapshot for drift tracking, captured by the caller from the file
    * as it is right now; without one, the next relocation pass backfills it.
+   *
+   * `extra` carries fields this module does not interpret — `refiner web`'s
+   * `web` target lives there (`src/web/session.ts`). They are spread FIRST so
+   * they can never shadow the fields the contract defines.
    */
   addThread(
     file: string,
@@ -620,8 +624,10 @@ export class Store {
     end: number,
     first: NewComment,
     anchor?: Anchor,
+    extra?: Record<string, unknown>,
   ): StoredThread {
     const t: StoredThread = {
+      ...extra,
       id: this.newId('t'),
       file,
       range: { start, end },

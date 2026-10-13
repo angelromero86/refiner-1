@@ -385,6 +385,52 @@ spawn the parser worker from Bun's virtual filesystem, which is why `bun run bui
 emits `dist/refiner-assets/` — ship it alongside the binary or highlighting silently
 switches off (by design: `highlightDiff` never throws).
 
+## refiner web
+
+`refiner web <url>` (`src/web/`) is the browser counterpart: Chrome driven over
+CDP, an overlay injected into an ISOLATED world, threads pinned to DOM elements.
+No extension, no puppeteer — `cdp.ts` is a dozen methods over one WebSocket.
+
+**The overlay is a view, never the source of truth.** `overlay.js` sends intents
+through the `__refiner` binding; `session.ts` mutates the `Store`, saves, and
+broadcasts the state back to every tab. The overlay never edits its copy of a
+thread optimistically, for the same reason the TUI never paints a staged row
+git did not report. Mutations and store reloads share ONE queue (`enqueue`) —
+the staging lesson again. State goes out before the ack, because the ack opens
+the new thread's card and a card for an unknown thread is nothing.
+
+**Two worlds, one DOM.** The overlay cannot see the page's JS and vice versa —
+that is what makes it immune to the app's globals and CSP. Framework internals
+(`ng`, React fibers, Vue instances) live in the MAIN world, so `SOURCE_PROBE`
+(`source.ts`) runs there, finding the element by the `data-refiner-pick`
+attribute the overlay stamps on it — the DOM is the only thing both share. The
+overlay's UI lives in a shadow root under `<refiner-overlay>`; every DOM query
+skips that host. It mounts lazily: at document start there is no `<html>` yet.
+
+**`web-comments.json` is a separate file on purpose.** Same `Store`, same shape,
+same skills — but `comments.json` is a contract with the VSCode extension in which
+every thread is `file` + line `range`, and a DOM thread is neither. In the web
+file `file` is the page key and `range` a placeholder the Store requires; the
+target is `web` (`WebTarget`), passed through `addThread`'s `extra`. Pages are
+ROUTES (`page.ts`: ids → `:id`, host and query dropped) — collapsing must stay
+conservative, merging two real pages is worse than splitting one.
+
+**Anchors are fingerprints, re-resolved, never rewritten.** `resolve()` in the
+overlay votes testid/id/text/name/role/classes/css path/dom path/proximity into a
+0..1 score: `exact` (≥0.8 and the recorded CSS path still matches), `moved`
+(≥0.5), `lost`. Unlike the TUI it does NOT write a corrected anchor on `moved`:
+there is no `range` anything depends on, and re-capturing a guess makes the next
+guess drift further. A unique test id makes a refactor `exact`, correctly.
+
+`.js`, not `.ts`, because it is browser code (tsconfig has no DOM lib, and adding
+it leaks DOM globals into the whole program); it is embedded with a text import
+(`with { type: 'text' }`, typed by `src/web/text.d.ts`) so a compiled binary
+carries it. Pins are positioned with `left`/`top`: the hover `scale` composes
+with `transform` and would scale a translate's offset too. `git grep` patterns
+use POSIX classes — macOS's ERE has no `\s`/`\b` and silently matches nothing.
+`test/web.test.ts` runs the real loop against headless Chrome and skips, never
+fakes, when there is none.
+
 ## Vocabulary
 
 A **thread** is anchored to `(file, line range)`, carries `status`, and contains one

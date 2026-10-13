@@ -82,6 +82,9 @@ Stack: Bun + [OpenTUI](https://opentui.com) (núcleo nativo en Zig). Port de
 - **Dos modos**:
   - `refiner` → cambios sin commitear (working tree + index)
   - `refiner <branch>` → review contra `<branch>...HEAD`
+- **Review de la interfaz** — `refiner web <url>` abre Chrome sobre tu app con un
+  overlay estilo Figma: `C`, click en cualquier elemento, y dejas un thread pegado a
+  él. Ver [Review en el navegador](#review-en-el-navegador).
 
 ## Instalar
 
@@ -536,13 +539,14 @@ desplegándola.)
 
 ### Skills
 
-El repo trae las dos skills de Claude Code que mueven este flujo, en
+El repo trae las skills de Claude Code que mueven este flujo, en
 [`skills/`](skills/):
 
 | Skill | Para qué |
 |-------|----------|
 | `refine-review` | Revisar el diff actual y dejar threads nuevos en `.refiner/comments.json`. No toca código. |
-| `refine-resolve` | Leer los threads abiertos, aplicar los cambios pedidos y responder en cada uno. No resuelve ni borra nada. |
+| `refine-resolve` | Leer los threads abiertos (los de código y los de la interfaz), aplicar los cambios pedidos y responder en cada uno. No resuelve ni borra nada. |
+| `refine-web` | Pedirte la URL y abrir Chrome con el overlay de review encima. |
 
 Instalación, desde el clon de refiner:
 
@@ -569,6 +573,76 @@ Luego, dentro de Claude Code: `/refine-review` para que revise, `/refine-resolve
 para que aplique. Después pulsa `r` en refiner y verás sus respuestas.
 
 Las mismas skills sirven si usas la extensión de VSCode: el store es el mismo.
+
+## Review en el navegador
+
+```
+/refine-web localhost:4200      → Chrome se abre sobre tu app con el overlay
+  C · click en un elemento      → thread anclado a ese elemento, con captura
+  … navegas, recargas …         → los pins siguen ahí, en cada página
+/refine-resolve                 → el agente lee la captura, cambia el código,
+                                  re-fotografía el elemento y te contesta
+                                  → el pin se pone verde en el navegador
+```
+
+`refiner web <url>` lanza Chrome (o Chromium, Brave, Edge; `REFINER_CHROME` manda)
+con un **perfil propio por repo** en `~/.config/refiner/chrome/` — tu Chrome de
+siempre no se toca, y como el perfil persiste, haces login en tu app una vez. **No
+hay extensión**: el overlay se inyecta por el protocolo de DevTools en un *mundo
+aislado*, así que sobrevive a cualquier navegación (recargas, rutas de SPA, pestañas
+nuevas), la página no lo ve y su CSP no le afecta.
+
+En la página:
+
+| Tecla | |
+|-------|-|
+| `C` | modo comentario: click en un elemento; `↑`/`↓` sube al padre / vuelve; `enter` elige el resaltado |
+| `shift+C` | panel con **todos** los threads, agrupados por página; click en uno te lleva |
+| `esc` | cancela / cierra |
+| `⌘↵` | publica el comentario o la respuesta |
+
+Los pins son morados; verde cuando el agente ya ha respondido y te toca a ti; gris
+los resueltos (ocultos salvo que marques *resolved*). La tarjeta de un thread es la
+misma conversación que en la TUI — markdown, respuestas, ✓ Resolve, Delete con
+confirmación.
+
+**Las páginas son rutas, no URLs.** Un thread en `/users/42/edit` aparece también en
+`/users/7/edit`: los ids (números, UUIDs, hex largo) se colapsan a `:id`, y el host
+y la query se ignoran, para que el mismo thread valga en `localhost:4200` hoy y en
+`:4201` mañana. El hash cuenta si es routing (`#/ruta`).
+
+**Los threads siguen al elemento.** Lo que se guarda no es "el elemento" — se
+recrea en cada render — sino una huella: test id (`data-testid`, `data-cy`…), id,
+texto, nombre accesible, clases estables (sin las generadas), ruta CSS y posición.
+En cada carga se vota entre candidatos: `exact` si el de siempre sigue ahí,
+`moved` (pin con borde discontinuo) si otro elemento reúne suficientes señales,
+`lost` si nada — entonces el thread queda en el panel, sin pin, y no se pierde.
+
+**Del elemento al código.** Al crear un thread refiner pregunta al framework, en
+modo desarrollo, de quién es ese elemento: Angular (`ng.getOwningComponent` → la
+clase por `git grep` → su `templateUrl`, con la línea del elemento), React (fiber →
+componente y `_debugSource`), Vue (`__file`), Svelte (`__svelte_meta`) o los
+atributos de plugins tipo *code inspector* (`data-insp-path`…). Y hace una captura
+del elemento con un recuadro, a `.refiner/shots/` (fuera de git: se autoignora).
+Con eso el agente sabe qué fichero abrir y *ve* lo que tú viste.
+
+**El agente cierra el ciclo con sus propios ojos:**
+
+```bash
+refiner web shot <thread-id>   # reabre la página, re-encuentra el elemento, foto nueva
+refiner web list               # los threads web, una línea JSON cada uno
+```
+
+`shot` reutiliza el Chrome que tengas abierto (mismas cookies) o arranca uno headless
+sobre el mismo perfil, y devuelve `{status, text, shot, before}` para que el agente
+compare antes y después. Si la página no carga lo dice (`error`), en vez de dejar
+que un `lost` parezca "tu cambio borró el elemento".
+
+Los threads van a **`.refiner/web-comments.json`**, con el mismo `Store` que
+`comments.json` — merge con escrituras concurrentes, escritura atómica, modo solo
+lectura si el fichero está roto — y la misma forma, salvo que `file` es la página y
+el destino real va en `web`. Es un fichero aparte porque `comments.json` es un
+contrato con la extensión de VSCode en el que todo thread es fichero + líneas.
 
 ## Desarrollo
 

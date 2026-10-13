@@ -17,12 +17,15 @@ import { applyTheme } from './styles.ts'
 import { configureAssetRoot } from './syntax.ts'
 import { View } from './view.ts'
 import { installWatchers } from './watch.ts'
+import { runWeb } from './web/cli.ts'
 
 const USAGE = `refiner — git code-review TUI
 
 usage:
   refiner              review uncommitted changes (working tree + index)
   refiner <branch>     review the current branch against <branch>...HEAD
+  refiner web <url>    review a running web app: threads pinned to its UI
+                       (refiner web --help for more)
 
 keys:
   press k inside refiner for the full keymap
@@ -37,6 +40,12 @@ state:
 
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
+  if (args[0] === 'web') {
+    // A branch literally called `web` stays reviewable as `refiner refs/heads/web`.
+    const root = await enterRepoRoot()
+    await runWeb(root, args.slice(1), (await gitUserName()) || guessUser())
+    return
+  }
   if (args.includes('-h') || args.includes('--help')) {
     process.stdout.write(USAGE)
     return

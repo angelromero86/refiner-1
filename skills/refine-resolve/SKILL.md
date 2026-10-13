@@ -1,17 +1,20 @@
 ---
 name: refine-resolve
-description: Read open review threads from .refiner/comments.json, apply the requested changes, and reply in-thread (never resolves or deletes)
+description: Read open review threads from .refiner/comments.json (code) and .refiner/web-comments.json (UI elements, from refiner web), apply the requested changes, and reply in-thread (never resolves or deletes)
 user-invocable: true
 ---
 
 # refine-resolve skill
 
-You are reading open review threads from `.refiner/comments.json` and acting on each
-one — making the code change the human requested, then **replying** in the thread
-with what you did.
+You are reading open review threads and acting on each one — making the code change
+the human requested, then **replying** in the thread with what you did. They live in
+two files at the repo root, and you process both:
 
-The human wrote those threads in one of the two clients that share this file: the
-**refiner** TUI or the **Refiner** VSCode extension. Your replies show up in both.
+- `.refiner/comments.json` — threads on **lines of code**, written in the **refiner**
+  TUI or the **Refiner** VSCode extension. Your replies show up in both.
+- `.refiner/web-comments.json` — threads on **elements of the running UI**, written
+  in the browser through `refiner web` (see **Web threads** below). Your replies show
+  up live in that browser window.
 
 ## Arguments
 
@@ -72,9 +75,61 @@ You add a reply by **appending** a comment to that thread's `comments` array:
   and rewrites `range` itself. Dropping or editing the anchor degrades that
   silently; a `range` you corrected by hand would be overwritten anyway.)
 
+## Web threads
+
+`.refiner/web-comments.json` has exactly the same shape — `version`, `threads[]`,
+`id`, `status`, `comments[]` with the same roles and ids — and exactly the same rules:
+append a reply, never resolve, never delete. Two fields mean something else:
+
+- `file` is the **page** (a URL path with ids collapsed, e.g. `/users/:id/edit`),
+  **not** a source path. `range` is a placeholder (`1–1`). Never edit either.
+- `web` is the real target. **Never edit it** — the browser re-finds the element from
+  it on every load:
+
+```json
+"web": {
+  "url": "http://localhost:4200/settings",
+  "page": "/settings",
+  "title": "Acme · Settings",
+  "viewport": { "w": 1280, "h": 800 },
+  "anchor": { "tag": "button", "testid": "save", "text": "Save changes",
+              "classes": ["btn", "primary"], "css": "[data-testid=\"save\"]", "...": "..." },
+  "source": { "framework": "angular", "component": "SettingsFormComponent",
+              "file": "src/app/settings/settings-form.component.ts", "line": 12,
+              "template": "src/app/settings/settings-form.component.html:41" },
+  "shot": ".refiner/shots/mf3k2-ab12cd.png"
+}
+```
+
+How to work one:
+
+1. **Look at the picture.** `web.shot` is a PNG of the element as the human saw it,
+   outlined in dashed pink. Read it (it's an image file) before anything else: "this
+   is misaligned" means nothing without it.
+2. **Find the code.** `web.source` is the best hint — `template` (Angular, with the
+   element's line), else `file`:`line`. It is captured from the framework's dev-mode
+   internals and can be missing (production build, unknown framework) or point at
+   the owning component rather than the exact markup. Without it, search for the
+   element's text (`anchor.text`), its test id (`anchor.testid`), its classes, or the
+   page's route (`page`) in the router config.
+3. **Apply the change**, scoped to the thread, as for any thread.
+4. **Verify with your own eyes** when the app is running (it usually is — the human
+   just used it): `refiner web shot <thread-id>` reopens the page, re-finds the
+   element and prints JSON with `status` (`exact` / `moved` / `lost`), the element's
+   current `text`, and `shot` — a fresh PNG next to the original (`before`). Read
+   both images and compare. A dev server with hot reload has picked your edit up by
+   then; if the result says `lost`, the element is gone or the page didn't load —
+   say so in the reply rather than claiming success.
+5. **Reply** in the web thread. Mention which file you changed (the human is looking
+   at the browser, not the code) and, if you verified it, that you did.
+
+`refiner web list` prints one JSON line per web thread (id, status, page, element,
+source, shot, last role) — a quick way to survey them.
+
 ## Formatting the `body`
 
-VSCode renders `body` as **Markdown**. The TUI wraps it as **plain text** — it honors
+VSCode renders `body` as **Markdown**; so does the browser overlay (paragraphs,
+`code`, **bold**, lists, quotes, fenced blocks). The TUI wraps it as **plain text** — it honors
 your line breaks but shows the markup literally. Write prose that reads well either
 way: real paragraphs, short lines, no heavy markup scaffolding.
 
@@ -111,14 +166,15 @@ Match the structure to the size of what you did.
 ## Prerequisites
 
 1. Confirm you're inside a git repo: `git rev-parse --show-toplevel`.
-2. Read `.refiner/comments.json` from the repo root. If it's missing or has zero
-   threads, tell the user there's nothing to do and stop.
+2. Read `.refiner/comments.json` and `.refiner/web-comments.json` from the repo root
+   (either may be missing). If neither has a thread, tell the user there's nothing to
+   do and stop.
 
 ## Instructions
 
 ### Step 1 — Collect actionable threads
 
-Parse the JSON. For each thread, decide whether to act:
+Parse both files. For each thread, decide whether to act:
 
 | Condition | Action |
 |---|---|
@@ -152,7 +208,8 @@ A `thread-id` argument overrides the loop — process only that thread (after th
 
 ### Step 3 — Append a reply comment to the thread
 
-Edit `.refiner/comments.json` to append an `{ "role": "assistant", ... }` comment to
+Edit the file the thread came from (`.refiner/comments.json` or
+`.refiner/web-comments.json`) to append an `{ "role": "assistant", ... }` comment to
 the thread you acted on. Do it in place — preserve every other thread and every
 existing comment. The reply `body` should:
 - State **what changed** (file + the gist).
@@ -169,7 +226,9 @@ makes the extension stop loading and puts the TUI into an error banner with an e
 store.
 
 If the human has the TUI open while you work, they pick your replies up by pressing
-`r` (refresh) — it re-reads git and `.refiner/comments.json`.
+`r` (refresh) — it re-reads git and `.refiner/comments.json`. A `refiner web` window
+picks replies to web threads up by itself, within a fraction of a second: the pin
+turns green.
 
 ### Step 4 — When you can't proceed
 
@@ -188,14 +247,14 @@ Summarize for the user:
 >
 > Nothing was resolved or deleted — that's your call. Press `r` in refiner to pick up
 > the replies, verify each change, and close the threads you're happy with (`D` in the
-> TUI, ✓ in VSCode).
+> TUI, ✓ in VSCode, **✓ Resolve** on the card in the browser).
 
 ## Do NOT
 
 - Do **not** change `status` on any thread. Leave it `"open"`.
 - Do **not** delete any thread or comment — yours or the human's.
-- Do **not** edit the human's comments, the `range`, `file`, or `anchor` fields —
-  the TUI and the extension re-anchor threads to your edits on their own.
+- Do **not** edit the human's comments, the `range`, `file`, `anchor` or `web` fields —
+  the TUI, the extension and the browser overlay re-anchor threads on their own.
 - Do **not** batch unrelated changes under one thread's reply.
 - Do **not** skip verification. If your change doesn't build/pass, fix it first.
 - Do **not** leave the JSON invalid. Re-read your write and confirm it parses.
